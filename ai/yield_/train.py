@@ -5,6 +5,9 @@ Target: the batch's final lab titer. "Alerts so far" come from running the anoma
 over each historical batch offline; with train/serve parity that is exactly what the live
 service would have raised. Fault labels are never read.
 
+The lever effects the optimizer uses come from a separate response surface fitted to the
+clean process-characterisation runs (ADR-0015, `rsm.py`).
+
 Evaluation holds out 20% of batches (grouped, never rows of a training batch), reports
 RMSE and MAPE by batch day for the ensemble, the P50 model and the PLS baseline, and the
 P10-P90 coverage; then the final model is fitted on every batch.
@@ -15,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from dataclasses import dataclass
 
 import numpy as np
 import psycopg
@@ -25,9 +29,12 @@ from ai.context import controlled_by_config
 from ai.offline import Collected, from_history, to_input
 from ai.yield_.features import YieldInput, features_at, training_days
 from ai.yield_.model import YieldModel, calibrate_band, fit, version_for
+from ai.yield_.rsm import LEVERS, ResponseSurface, fit_surface
 from common import pools
+from common.models import BatchStatus
 from common.settings import Settings
 from historian.migrate import connect
+from simulator import recipes
 
 log = logging.getLogger("train.yield")
 HOLDOUT = 0.2
@@ -41,15 +48,16 @@ ORDER BY s.ts
 """
 
 
-def alert_minutes(anomaly_model, batch_id: str, c: Collected) -> list[float]:
+def alerts(anomaly_model, batch_id: str, c: Collected) -> tuple[list[float], bool]:
+    """Alert open times (for "alerts so far") and whether the rules layer flagged a
+    process deviation (which excludes a DoE run from the response surface)."""
     if anomaly_model is None:
-        return []
+        return [], False
     result = anomaly_train.run(anomaly_model, to_input(batch_id, c, controlled_by_config()))
-    return [
-        float(ch.end)
-        for ch in result.changes
-        if ch.state == "OPEN" and not ch.key.startswith("rules-quality")
+    opens = [
+        ch for ch in result.changes if ch.state == "OPEN" and not ch.key.startswith("rules-quality")
     ]
+    return [float(ch.end) for ch in opens], any(ch.key.startswith("rules-") for ch in opens)
 
 
 def harvest_day(c: Collected) -> float | None:
@@ -78,25 +86,52 @@ def _init(settings: Settings) -> None:
     _anomaly = store.load(settings.models_dir, "anomaly")
 
 
-def _extract(batch_id: str) -> tuple[str, np.ndarray, float] | None:
+@dataclass
+class Extracted:
+    batch_id: str
+    X: np.ndarray
+    titer: float
+    levers: list[float]
+    doe_run: bool  # a clean process-characterisation run (ADR-0015)
+
+
+def _extract(batch_id: str) -> Extracted | None:
     assert _settings is not None
     with connect(_settings.postgres_dsn) as conn:
         c = from_history(conn, batch_id)
-    rows = batch_rows(c, alert_minutes(_anomaly, batch_id, c))
-    return None if rows is None else (batch_id, rows[0], rows[1])
+        campaign = conn.execute(
+            "SELECT payload -> 'v' ->> 'campaign' FROM uns_events WHERE batch_id = %s "
+            "AND payload -> 'v' ->> 'kind' = 'BATCH_START'",
+            (batch_id,),
+        ).fetchone()[0]
+    minutes, deviation = alerts(_anomaly, batch_id, c)
+    rows = batch_rows(c, minutes)
+    if rows is None:
+        return None
+    clean = campaign == "PC" and c.status is BatchStatus.COMPLETE and not deviation
+    return Extracted(batch_id, rows[0], rows[1], [getattr(c.levers, k) for k in LEVERS], clean)
 
 
-def dataset(
-    conn: psycopg.Connection, settings: Settings
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
+def dataset(conn: psycopg.Connection, settings: Settings) -> list[Extracted]:
     ids = [r[0] for r in conn.execute(BATCHES_SQL)]
     workers = max(1, (os.cpu_count() or 2) - 1)
     with pools.pool(_init, (settings,), workers) as pool:
-        results = [r for r in pool.map(_extract, ids) if r is not None]
-    X = np.concatenate([r[1] for r in results])
-    y = np.concatenate([np.full(len(r[1]), r[2]) for r in results])
-    groups = np.concatenate([np.full(len(r[1]), i) for i, r in enumerate(results)])
-    return X, y, groups, [r[0] for r in results]
+        return [r for r in pool.map(_extract, ids) if r is not None]
+
+
+def arrays(results: list[Extracted]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    X = np.concatenate([r.X for r in results])
+    y = np.concatenate([np.full(len(r.X), r.titer) for r in results])
+    groups = np.concatenate([np.full(len(r.X), i) for i, r in enumerate(results)])
+    return X, y, groups
+
+
+def doe_surface(results: list[Extracted], seed: int) -> ResponseSurface:
+    runs = [r for r in results if r.doe_run]
+    par = recipes.get("v3").par  # the PARs are the same for every recipe version
+    return fit_surface(
+        np.array([r.levers for r in runs]), np.array([r.titer for r in runs]), par, seed
+    )
 
 
 def evaluate(X: np.ndarray, y: np.ndarray, groups: np.ndarray, seed: int) -> dict:
@@ -145,7 +180,9 @@ def train_yield(conn: psycopg.Connection, settings: Settings, force: bool = Fals
         log.info("yield model %s is up to date", version)
         return False
     t0 = time.perf_counter()
-    X, y, groups, batch_ids = dataset(conn, settings)
+    results = dataset(conn, settings)
+    X, y, groups = arrays(results)
+    batch_ids = [r.batch_id for r in results]
     log.info(
         "dataset: %d rows from %d batches (%.0f s)",
         len(y),
@@ -156,6 +193,8 @@ def train_yield(conn: psycopg.Connection, settings: Settings, force: bool = Fals
     model: YieldModel = fit(X, y, groups, settings.seed, version)
     model.metrics = metrics
     model.band_scale = metrics["band_scale"]
+    model.surface = doe_surface(results, settings.seed)
+    metrics["doe_runs"] = model.surface.runs
     store.save(
         settings.models_dir,
         "yield",

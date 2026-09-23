@@ -1,5 +1,5 @@
 """The three detection layers and the alert lifecycle (architecture: anomaly detection;
-ADR-0013, ADR-0014). Pure: no MQTT, no databases.
+ADR-0013, ADR-0015). Pure: no MQTT, no databases.
 
 - Layer 1, rules: spec limits (recipe action limits), temperature rate of change, stuck
   sensors (bit-identical published values), bad quality.

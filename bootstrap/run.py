@@ -16,11 +16,12 @@ Running it again is a no-op. Services that need its results declare
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
 
-from ai import train_all
+from ai import store, train_all
 from ai.anomaly import evaluate as anomaly_evaluate
 from ai.yield_ import evaluate as yield_evaluate
 from ai.yield_.train import train_yield
@@ -31,6 +32,19 @@ from historian.migrate import connect, migrate
 from simulator import backfill
 
 log = logging.getLogger("bootstrap")
+
+
+def reports_current(models_dir: str) -> bool:
+    """Each evaluation report names the model version it evaluated; a report written for
+    another version (or cut short) is stale."""
+    for name in ("anomaly", "yield"):
+        path = Path(models_dir) / f"{name}_eval.json"
+        manifest = store.manifest(models_dir, name) or {}
+        if not path.exists() or json.loads(path.read_text()).get("model") != manifest.get(
+            "version"
+        ):
+            return False
+    return True
 
 
 def main() -> None:
@@ -54,9 +68,7 @@ def main() -> None:
         log.info("step 5/6: model training")
         retrained = train_all.train_anomaly(conn, settings)
         retrained = train_yield(conn, settings) or retrained
-        models = Path(settings.models_dir)
-        reports = (models / "anomaly_eval.json", models / "yield_eval.json")
-        if retrained or not all(r.exists() for r in reports):
+        if retrained or not reports_current(settings.models_dir):
             log.info("step 6/6: evaluation reports")
             anomaly_evaluate.evaluate(settings)
             yield_evaluate.evaluate(settings, per_recipe=4, day=4.0)

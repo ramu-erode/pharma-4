@@ -1,4 +1,4 @@
-"""Mid-batch features for titer prediction (ADR-0014). One function, `features_at`, for
+"""Mid-batch features for titer prediction (ADR-0015). One function, `features_at`, for
 training rows and live predictions alike.
 
 A row at batch day d holds what is known by then (lab results, process summaries,

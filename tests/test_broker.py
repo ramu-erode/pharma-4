@@ -4,6 +4,7 @@ import contextlib
 import queue
 import time
 
+import psycopg
 import pytest
 
 from common import models as m
@@ -94,3 +95,11 @@ def test_ai_services_never_receive_ground_truth():
     finally:
         sim.close()
         anomaly.close()
+        forget_test_label("F-t")
+
+
+def forget_test_label(label_id: str) -> None:
+    """The historian stores what the test published; leave the stack's history clean."""
+    time.sleep(1.5)  # let the historian flush first
+    with psycopg.connect(get_settings().postgres_dsn, autocommit=True) as conn:
+        conn.execute("DELETE FROM fault_labels WHERE id = %s", (label_id,))

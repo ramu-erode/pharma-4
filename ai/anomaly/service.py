@@ -1,5 +1,5 @@
 """Anomaly service: scores every closed 30-minute window live and publishes into the UNS
-(ADR-0014): `ai/anomaly/score` per window and `ai/anomaly/alert/<key>` per alert
+(ADR-0015): `ai/anomaly/score` per window and `ai/anomaly/alert/<key>` per alert
 lifecycle (ADR-0013).
 
     python -m ai.anomaly.service

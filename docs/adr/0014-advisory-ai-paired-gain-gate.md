@@ -1,6 +1,6 @@
 # ADR-0014: AI output is advisory; recommendations are gated on paired gain
 
-Status: Accepted
+Status: Superseded by ADR-0015
 Date: 2026-09-23
 Supersedes: ADR-0007
 

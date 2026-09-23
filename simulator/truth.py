@@ -1,4 +1,4 @@
-"""Ground truth for evaluating the optimizer (ADR-0014): the true final titer of a batch
+"""Ground truth for evaluating the optimizer (ADR-0015): the true final titer of a batch
 under a given set of levers. Available because the plant is simulated (ADR-0008);
 nothing in the live path may call this.
 """

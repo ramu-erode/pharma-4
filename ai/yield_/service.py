@@ -1,5 +1,5 @@
 """Yield service: mid-batch titer band every 6 simulated hours and gated setpoint advice
-(ADR-0014). Advisory only: it publishes `ai/yield/prediction` and a retained
+(ADR-0015). Advisory only: it publishes `ai/yield/prediction` and a retained
 `ai/yield/recommendation`, and never writes to control.
 
     python -m ai.yield_.service
@@ -207,7 +207,7 @@ class YieldService:
                  rec.id, rec.gain.p50)  # fmt: skip
 
     def _par(self, state: UnitState) -> dict[str, tuple[float, float]]:
-        """PARs from the graph once per batch (ADR-0014), configuration as fallback."""
+        """PARs from the graph once per batch (ADR-0015), configuration as fallback."""
         if state.par is None:
             par = {}
             if self.driver is not None:

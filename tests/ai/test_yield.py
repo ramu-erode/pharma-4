@@ -1,48 +1,51 @@
-"""Yield prediction and advice (ADR-0014), without trained artefacts."""
+"""Yield prediction and advice (ADR-0015), without trained artefacts."""
 
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from ai.yield_ import optimize
-from ai.yield_.features import FEATURES, LEVERS, training_days, with_levers
+from ai.yield_ import optimize, rsm
+from ai.yield_.features import FEATURES, training_days, with_levers
 from ai.yield_.model import measured
+from ai.yield_.rsm import LEVERS, ResponseSurface, fit_surface
 from simulator import recipes
 
 PAR = recipes.get("v3").par
 NOMINAL = recipes.get("v3").nominal
 
 
-class Peaked:
-    """A stand-in booster: titer gain peaks at prod_temp 33.5 and feed_mult 1.1."""
+def true_titer(L: np.ndarray) -> np.ndarray:
+    """A known surface: best at prod_temp 33.5, feed_mult 1.1; the other levers are flat."""
+    L = np.atleast_2d(L)
+    t, f = L[:, LEVERS.index("prod_temp")], L[:, LEVERS.index("feed_mult")]
+    return 5.0 - 0.5 * (t - 33.5) ** 2 - 4 * (f - 1.1) ** 2
 
-    def __init__(self, bias: float = 0.0) -> None:
-        self.bias = bias
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        X = np.atleast_2d(X)
-        t = X[:, FEATURES.index("prod_temp")]
-        f = X[:, FEATURES.index("feed_mult")]
-        return 5.0 - (t - 33.5) ** 2 - 4 * (f - 1.1) ** 2 + self.bias
+def doe(n: int = 60, noise: float = 0.05, seed: int = 0) -> ResponseSurface:
+    rng = np.random.default_rng(seed)
+    L = np.stack([rng.uniform(*PAR[k], n) for k in LEVERS], axis=1)
+    y = true_titer(L) + rng.normal(0, noise, n)
+    return fit_surface(L, y, PAR, seed)
 
 
 class FakeModel:
-    def __init__(self, members) -> None:
-        self.members = members
+    """The in-batch titer model only supplies the displayed current prediction."""
+
+    def __init__(self, surface: ResponseSurface) -> None:
+        self.surface = surface
 
     def member_predictions(self, X):
-        return np.stack([b.predict(X) for b in self.members]) + measured(X)
-
-    def predict(self, X):
-        return self.member_predictions(X).mean(axis=0)
+        return np.full((20, len(np.atleast_2d(X))), 4.5)
 
 
-def row(**levers: float) -> np.ndarray:
-    x = np.zeros(len(FEATURES))
-    x[FEATURES.index("titer_so_far")] = np.nan
-    return with_levers(x, {**NOMINAL.model_dump(), **levers})
+SURFACE = doe()
+
+
+def row() -> np.ndarray:
+    return np.zeros(len(FEATURES))
 
 
 def test_shift_day_is_frozen_once_the_batch_has_shifted():
@@ -74,13 +77,48 @@ def test_gate_needs_an_actual_change():
     assert not advice.passes_gate
 
 
-def test_recommendation_moves_toward_the_optimum():
-    model = FakeModel([Peaked(b) for b in np.linspace(-0.05, 0.05, 20)])
-    levers = NOMINAL.model_copy(update={"prod_temp": 33.0, "feed_mult": 1.0})
-    x = row(prod_temp=33.0, feed_mult=1.0)
-    advice = optimize.recommend(model, x, levers, 4.0, "Growth", PAR, seed=1, trials=60)
-    assert advice.recommended["prod_temp"] > 33.2 and advice.recommended["feed_mult"] > 1.04
-    assert np.median(advice.gain) > 0
+def test_surface_recovers_a_known_optimum():
+    grid = np.array([[5.0, t, 7.0, 40.0, f] for t in np.linspace(32, 35, 31) for f in (1.1,)])
+    best = grid[SURFACE.predict(grid).mean(axis=0).argmax()]
+    assert abs(best[1] - 33.5) < 0.3
+
+
+def test_recommendation_moves_toward_the_optimum_and_the_gain_is_honest():
+    levers = NOMINAL.model_copy(update={"prod_temp": 32.6, "feed_mult": 0.95})
+    advice = optimize.recommend(FakeModel(SURFACE), row(), levers, 2.0, "Growth", PAR, seed=1)
+    assert advice.recommended["prod_temp"] > 32.8 and advice.recommended["feed_mult"] > 1.0
+    assert advice.passes_gate
+    now = np.array([getattr(levers, k) for k in LEVERS])
+    moved = optimize.effective(advice.current, advice.recommended, 2.0)
+    true_gain = float(true_titer(moved)[0] - true_titer(now)[0])
+    assert abs(np.median(advice.gain) - true_gain) < 0.1
+
+
+def test_no_advice_at_the_optimum():
+    levers = NOMINAL.model_copy(update={"prod_temp": 33.5, "feed_mult": 1.1})
+    advice = optimize.recommend(FakeModel(SURFACE), row(), levers, 4.0, "Growth", PAR, seed=1)
+    assert not advice.passes_gate
+
+
+def test_too_few_runs_is_refused():
+    with pytest.raises(ValueError, match="DoE runs"):
+        doe(n=12)
+
+
+def test_a_noisy_experiment_keeps_the_gate_shut_near_the_optimum():
+    noisy = doe(n=40, noise=0.8, seed=3)
+    levers = NOMINAL.model_copy(update={"prod_temp": 33.3, "feed_mult": 1.08})
+    advice = optimize.recommend(FakeModel(noisy), row(), levers, 4.0, "Growth", PAR, seed=1)
+    assert not advice.passes_gate
+
+
+def test_exposure_shrinks_late_changes():
+    assert rsm.exposure("ph_sp", 0.0, 5.0) == 1.0
+    assert rsm.exposure("ph_sp", 7.0, 5.0) == 0.5
+    assert rsm.exposure("prod_temp", 3.0, 5.0) == 1.0  # before the shift: all ahead
+    assert rsm.exposure("prod_temp", 9.5, 5.0) == 0.5
+    assert rsm.exposure("feed_mult", 13.0, 5.0) == 0.0
+    assert rsm.exposure("shift_day", 3.0, 5.0) == 1.0
 
 
 @settings(max_examples=15, deadline=None)
@@ -90,11 +128,9 @@ def test_recommendation_moves_toward_the_optimum():
     st.floats(3.0, 12.0),
 )
 def test_recommendations_stay_inside_the_pars_and_the_trust_region(temp, feed, day):
-    model = FakeModel([Peaked(0.0)] * 4)
     levers = NOMINAL.model_copy(update={"prod_temp": temp, "feed_mult": feed})
     op = "Growth" if day < levers.shift_day else "Production"
-    x = row(prod_temp=temp, feed_mult=feed)
-    advice = optimize.recommend(model, x, levers, day, op, PAR, seed=1, trials=20)
+    advice = optimize.recommend(FakeModel(SURFACE), row(), levers, day, op, PAR, seed=1, trials=20)
     for k, v in advice.recommended.items():
         lo, hi = PAR[k]
         assert lo - 1e-9 <= v <= hi + 1e-9
@@ -118,7 +154,8 @@ def test_training_days_stop_before_harvest():
 
 
 def test_measured_titer_is_zero_before_the_first_sample():
-    x = row()
+    x = with_levers(row(), NOMINAL.model_dump())
+    x[FEATURES.index("titer_so_far")] = np.nan
     assert measured(x)[0] == 0.0
     x[FEATURES.index("titer_so_far")] = 2.5
     assert measured(x)[0] == 2.5

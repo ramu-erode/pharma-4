@@ -2,7 +2,7 @@
 
 Architecture reference for the pharma-4 POC. The decisions behind it are recorded in [docs/adr](adr/README.md). Last updated 2026-09-23.
 
-> This revision reflects ADR-0009 to ADR-0014. Where it differs from the earlier revision, the ADR named in the section says why.
+> This revision reflects ADR-0009 to ADR-0015. Where it differs from the earlier revision, the ADR named in the section says why.
 
 ## Purpose & scope
 
@@ -325,7 +325,7 @@ RETURN b.campaign, b.shift_day, b.ph_sp, avg(o.titer), count(b);
 
 ## AI: anomaly detection
 
-Three layers, from simple and explainable to learned and multivariate (ADR-0014).
+Three layers, from simple and explainable to learned and multivariate (ADR-0015).
 
 | Layer | Method | Catches | Explainability |
 | --- | --- | --- | --- |
@@ -351,7 +351,7 @@ Three layers, from simple and explainable to learned and multivariate (ADR-0014)
 
 ## AI: yield prediction & optimization
 
-Advisory only (ADR-0014).
+Advisory only (ADR-0015).
 
 **1. Mid-batch titer prediction** (`ai/yield_/`)
 
@@ -362,28 +362,28 @@ Advisory only (ADR-0014).
 - **Output:** `ai/yield/prediction` every 6 simulated hours from day 3.
 - **Measured** (held out, 2026-09-23): ensemble RMSE 0.49 g/L at day 3 falling to 0.27 at day 12; PLS 0.49 to 0.41.
 
-**2. Setpoint optimization**
+**2. Setpoint optimization** (ADR-0015)
 
 - **Levers:** temperature-shift day (4–7), production temperature (32–35 °C), pH SP (6.90–7.10), DO SP (30–50%), feed multiplier (0.8–1.2). Bounds come from the recipe's PARs in the graph.
-- **Frozen versus open:** the shift day is frozen once the batch has shifted (and can move no sooner than 6 h ahead); the others stay open. Optuna TPE searches only the open levers, within a **trust region** of 25% of each PAR's width around the current value, so the search stays near inputs the model has seen.
-- **Split ensemble:** ten members drive the search and the other ten, which played no part in choosing, judge the winner (against the optimizer's curse).
+- **What a change is worth comes from the designed experiment.** A quadratic response surface in the coded levers (`ai/yield_/rsm.py`) is fitted with Huber loss to the **clean process-characterisation runs**: COMPLETE, with no rules-layer alert (a process deviation excludes a DoE run; no labels are read). At least 25 runs are required. 200 bootstrap refits give the uncertainty. The in-batch titer model is *not* used for lever effects: fitted to all history, it overstated them about threefold.
+- **Frozen versus open:** the shift day is frozen once the batch has shifted (and can move no sooner than 6 h ahead); the others stay open. Optuna TPE searches only the open levers, within a **trust region** of 25% of each PAR's width, because a quadratic is only trustworthy locally.
+- **Mid-batch changes:** a change on day d is scored as a smaller whole-batch change, by the remaining fraction of the lever's window (`rsm.exposure`).
+- **Split bootstrap:** half the surfaces drive the search, the other half judge the winner.
 - **Gate:** publish only if the judges' paired gain has P10 > 0 **and** median ≥ 0.1 g/L, and a lever actually moves. Otherwise clear the retained recommendation.
 - **Output:** `ai/yield/recommendation`, with current versus recommended values per lever, gain P10/P50/P90 and model version.
-- **Known limitation:** the optimizer changes a lever while holding the observed trajectory fixed, and a mid-batch change is approximated by the whole-batch value the model was trained on.
 
-**Ground-truth check** (`python -m ai.yield_.evaluate`, report in `models/yield_eval.json`). Fresh batches stop at day 4, take the recommendation, and the simulator says what following it *truly* gains. Measured on 2026-09-23 (4 batches each on recipes v1 and v3):
+**Ground-truth check** (`python -m ai.yield_.evaluate`, report in `models/yield_eval.json`). Fresh batches stop at day 4, take the recommendation, and the simulator says what following it *truly* gains. 4 batches each on recipes v1 and v3, measured 2026-09-23:
 
-| | v1 (far from the optimum) | v3 (near it) |
+| | In-batch model as surrogate (ADR-0014) | DoE response surface (ADR-0015) |
 | --- | --- | --- |
-| Predicted gain (P50) | +0.68 to +0.91 g/L | +0.25 to +0.68 g/L |
-| True gain | +0.20 to +0.57 g/L | 0.00 to +0.09 g/L |
-| Gate | open 4/4, all truly worth ≥ 0.1 g/L | open 4/4, none truly worth it |
-
-The advice points the right way and never lowered the true titer, but predicted gains run about **2.8× the true gains**, and the paired-gain gate cannot tell a near-optimal batch from one with room to improve. The bias is shared by every ensemble member, so neither the paired gain nor the split ensemble removes it. This is an open question for the design (see Build plan).
+| Gate opened | 8 of 8 | 5 of 8 |
+| …of those, truly worth ≥ 0.1 g/L | 4 | **5 (all)** |
+| Near-optimal v3 batches | opened on all 4 (true gain ≈ 0) | closed on 3 (true ≈ 0), opened on 1 (true +0.12) |
+| Predicted ÷ true gain, median | 2.8× | **1.4×** |
 
 **3. Acting on advice.** There is no Apply button. The operator uses the dashboard's **DCS console** (a `_sim/cmd/setpoint` stand-in), optionally citing the recommendation id. The simulator emits `events/operator`, and the graph links the action to the recommendation (ADR-0012).
 
-**4. Batch-level learning.** SHAP values (LightGBM's built-in TreeSHAP, so no `shap` dependency) rank what drives the remaining gain, shown beside the graph query linking levers to outcome by campaign. That is the process-understanding story that Quality by Design asks for.
+**4. Batch-level learning.** SHAP values (LightGBM's built-in TreeSHAP, so no `shap` dependency) rank what drives the remaining gain, shown beside the graph query linking levers to outcome by campaign. The response surface's coefficients say what each lever is worth, as established by the designed experiment. That is the process-understanding story that Quality by Design asks for.
 
 **Honest limits.** The simulator has a known ground-truth yield function, so optimizer quality is measurable here, and the measurement above is the honest result. Real plants will need far more batches, and a designed experiment is still the proper way to move a validated setpoint.
 
@@ -501,5 +501,5 @@ TimescaleDB stays (ADR-0004). InfluxDB is only revisited if a client's stack req
 2. Start batch B2026-0200 on BR-101 from the Demo sidebar, at 3600×. Show live trends and the operation and phase states.
 3. Inject pH probe drift. The pH PV stays at 7.00, yet the EWMA on CO2 demand opens an alert, and the next `ph_offline` confirms it — hours before the true pH leaves the band. The alert appears as an Event in the graph.
 4. Run "alerts on low-titer batches by tag" to show that pH issues correlate with low yield.
-5. Run to day 4, then pause. Show the titer band and the recommendation, if the gate is open (a batch on the current recipe v3 is near the optimum, so the gate may rightly stay closed; a batch started on legacy recipe v1 has real room to improve). In the DCS console, the operator applies it, citing the recommendation. Resume, and watch the band move. Then open *Optimizer against ground truth* on the Yield page: what the advice would truly have gained.
+5. Run to day 4, then pause. Show the titer band and the recommendation, if the gate is open. A batch on the current recipe v3 is near the optimum, so the gate usually, and rightly, stays closed. Start the demo batch on legacy recipe v1 to show a recommendation with a real gain. In the DCS console, the operator applies it, citing the recommendation. Resume, and watch the band move. Then open *Optimizer against ground truth* on the Yield page: what the advice would truly have gained.
 6. Close with the SHAP drivers and the advice → action → outcome graph query: process understanding, not just a black box.

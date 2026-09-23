@@ -1,14 +1,16 @@
-"""Setpoint recommendation (ADR-0014). Pure: no MQTT.
+"""Setpoint recommendation (ADR-0015). Pure: no MQTT.
 
-Only the levers whose window is still open are searched (Optuna TPE, inside the recipe's
-PARs); the observed trajectory stays fixed. A recommendation is made only if the
-ensemble agrees the gain is real: the paired gain (each member's recommended minus its
-current prediction, so shared error cancels) must have P10 > 0 and median >= MIN_GAIN.
+What a lever change is worth comes from the response surface fitted to the designed
+experiment (`rsm.py`), not from the in-batch titer model: fitted to all of history, that
+model overstated lever effects about threefold (measured against the simulator's truth).
 
-The ensemble is split: half the members drive the search, the other half judge the
-winner. Picking the best of many candidates with the same models that then score it
-inflates the gain (the optimizer's curse); measured against the simulator's ground truth,
-that inflation opened the gate for gains that did not exist.
+- Only open levers are searched (Optuna TPE), inside the PARs and a trust region around
+  the current values: the quadratic is only trusted locally.
+- A change made mid-batch acts only for the rest of the lever's window, so it is scored
+  as a proportionally smaller whole-batch change (`rsm.exposure`).
+- The bootstrap surfaces are split: half drive the search, the other half judge the
+  winner (against the optimizer's curse). The judges' paired gains must have P10 > 0 and
+  median >= MIN_GAIN, and some lever must actually move.
 """
 
 from __future__ import annotations
@@ -18,8 +20,8 @@ from dataclasses import dataclass
 import numpy as np
 import optuna
 
-from ai.yield_.features import LEVERS, with_levers
-from ai.yield_.model import YieldModel, measured
+from ai.yield_.model import YieldModel
+from ai.yield_.rsm import LEVERS, ResponseSurface, exposure
 from common.models import Levers
 
 MIN_GAIN = 0.1  # g/L: smallest gain worth a person's attention
@@ -44,9 +46,9 @@ class Advice:
     current: dict[str, float]
     recommended: dict[str, float]
     frozen: set[str]
-    predicted_current: np.ndarray  # member predictions
-    predicted_recommended: np.ndarray
-    gain: np.ndarray  # paired, per member
+    predicted_current: np.ndarray  # in-batch titer model, per ensemble member
+    predicted_recommended: np.ndarray  # the current prediction plus the judged gains
+    gain: np.ndarray  # paired, per judging surface
 
     @property
     def passes_gate(self) -> bool:
@@ -60,6 +62,30 @@ class Advice:
         )
 
 
+def effective(current: dict[str, float], candidate: dict[str, float], day: float) -> np.ndarray:
+    """The whole-batch lever vector equivalent to changing to `candidate` on `day`."""
+    shift = current["shift_day"]
+    return np.array(
+        [
+            current[k] + exposure(k, day, shift) * (candidate.get(k, current[k]) - current[k])
+            for k in LEVERS
+        ]
+    )
+
+
+def gains(
+    surface: ResponseSurface,
+    current: dict[str, float],
+    candidate: dict[str, float],
+    day: float,
+    which: slice,
+) -> np.ndarray:
+    """Paired gain of moving to `candidate` on `day`, one per bootstrap surface."""
+    now = np.array([current[k] for k in LEVERS])
+    pred = surface.predict(np.stack([now, effective(current, candidate, day)]), which)
+    return pred[:, 1] - pred[:, 0]
+
+
 def recommend(
     model: YieldModel,
     x_now: np.ndarray,
@@ -70,13 +96,12 @@ def recommend(
     seed: int,
     trials: int = TRIALS,
 ) -> Advice:
-    x_now = np.atleast_2d(x_now)
+    surface = model.surface
+    if surface is None:
+        raise ValueError("the yield model has no DoE response surface; retrain it")
     current = {k: float(getattr(levers, k)) for k in LEVERS}
-    open_ = open_levers(day, operation, levers)
-    # Trust region: move each lever at most TRUST of its PAR width from where it is, so the
-    # search stays near inputs the model has seen (it holds the trajectory fixed, ADR-0014).
     bounds = {}
-    for k in open_:
+    for k in open_levers(day, operation, levers):
         lo, hi = par[k]
         step = TRUST * (hi - lo)
         bounds[k] = (max(lo, current[k] - step), min(hi, current[k] + step))
@@ -86,19 +111,17 @@ def recommend(
         if bounds["shift_day"][0] >= hi:
             del bounds["shift_day"]
 
-    half = len(model.members) // 2
-    search, judge = model.members[:half], model.members[half:]
+    half = len(surface.coef) // 2
+    search, judge = slice(0, half), slice(half, None)
 
     def objective(trial: optuna.Trial) -> float:
         cand = {k: trial.suggest_float(k, lo, hi) for k, (lo, hi) in bounds.items()}
-        x = with_levers(x_now, cand)
-        return float(np.mean([b.predict(x)[0] for b in search]))
+        return float(gains(surface, current, cand, day, search).mean())
 
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
     study.enqueue_trial({k: min(max(current[k], lo), hi) for k, (lo, hi) in bounds.items()})
     study.optimize(objective, n_trials=trials)
     best = {**current, **study.best_params}
-    x_best = with_levers(x_now, study.best_params)
-    now = np.array([b.predict(x_now)[0] for b in judge]) + measured(x_now)[0]
-    rec = np.array([b.predict(x_best)[0] for b in judge]) + measured(x_best)[0]
-    return Advice(current, best, set(LEVERS) - set(bounds), now, rec, rec - now)
+    judged = gains(surface, current, best, day, judge)
+    now = model.member_predictions(np.atleast_2d(x_now))[:, 0]
+    return Advice(current, best, set(LEVERS) - set(bounds), now, now.mean() + judged, judged)

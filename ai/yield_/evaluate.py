@@ -1,4 +1,4 @@
-"""The optimizer against ground truth (ADR-0014, plan task 5.5).
+"""The optimizer against ground truth (ADR-0015, plan task 5.5).
 
     python -m ai.yield_.evaluate [--batches 4] [--day 4]
 
@@ -82,6 +82,7 @@ def evaluate(settings: Settings, per_recipe: int, day: float) -> dict:
         cases = list(pool.map(case, [(settings, s, day) for s in specs]))
     opened = [c for c in cases if c["gate_open"]]
     report = {
+        "model": (store.manifest(settings.models_dir, "yield") or {}).get("version"),
         "day": day,
         "cases": cases,
         "gate_opened": len(opened),

@@ -1,6 +1,6 @@
 """graph-sync core: UNS message -> Cypher statements. Pure; no driver.
 
-Subscriptions (ADR-0004, ADR-0012, ADR-0014): `_meta/tags`, `events/*`, `lab/*`,
+Subscriptions (ADR-0004, ADR-0012, ADR-0015): `_meta/tags`, `events/*`, `lab/*`,
 `ai/anomaly/alert/*`, `ai/yield/recommendation`, `_sim/faults`. Never `pv`/`sp`: raw
 values stay out of the graph. Every statement MERGEs on a natural key, so replaying a
 message changes nothing.

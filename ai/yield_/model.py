@@ -1,4 +1,4 @@
-"""Titer models (ADR-0014): a 20-member bootstrap LightGBM ensemble (point estimate and
+"""Titer models (ADR-0015): a 20-member bootstrap LightGBM ensemble (point estimate and
 paired gains), P10/P50/P90 quantile models (the displayed band), a PLS baseline (the
 bioprocess standard, for comparison) and TreeSHAP importances from LightGBM itself.
 
@@ -18,6 +18,7 @@ import numpy as np
 from sklearn.cross_decomposition import PLSRegression
 
 from ai.yield_.features import FEATURES
+from ai.yield_.rsm import ResponseSurface
 
 _TITER = FEATURES.index("titer_so_far")
 
@@ -51,6 +52,7 @@ class YieldModel:
     pls_fill: np.ndarray  # column means for PLS, which cannot take NaN
     importance: dict[str, float]  # mean |SHAP| per feature
     metrics: dict = field(default_factory=dict)
+    surface: ResponseSurface | None = None  # lever effects from the DoE (ADR-0015)
     band_scale: float = 1.0  # stretches the P10/P90 half-widths to their nominal coverage
     features: tuple[str, ...] = FEATURES
 
@@ -103,7 +105,7 @@ def fit(X: np.ndarray, y: np.ndarray, groups: np.ndarray, seed: int, version: st
     return YieldModel(version, members, quantiles, pls, fill, importance)
 
 
-MODEL_REVISION = "y2"  # bump when the modelling changes (y2: remaining-gain target, band scale)
+MODEL_REVISION = "y3"  # bump when the modelling changes (y3: DoE response surface, ADR-0015)
 
 
 def version_for(batch_ids: list[str], seed: int) -> str:

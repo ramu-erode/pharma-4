@@ -45,4 +45,5 @@ Date: YYYY-MM-DD
 | [0011](0011-operations-and-parallel-phases.md) | Sequential operations, parallel phases, projected attribution | Accepted |
 | [0012](0012-sim-branch-control-and-ground-truth.md) | A `_sim` branch for control and ground truth, fenced by ACL | Accepted |
 | [0013](0013-payload-typing-and-alert-lifecycle.md) | Typed `v` for structured payloads, and a keyed alert lifecycle | Accepted |
-| [0014](0014-advisory-ai-paired-gain-gate.md) | AI output is advisory; recommendations are gated on paired gain | Accepted |
+| [0014](0014-advisory-ai-paired-gain-gate.md) | AI output is advisory; recommendations are gated on paired gain | Superseded by 0015 |
+| [0015](0015-lever-effects-from-the-doe.md) | Lever effects come from the designed experiment, not the in-batch model | Accepted |

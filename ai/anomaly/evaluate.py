@@ -66,7 +66,15 @@ def evaluate(settings: Settings) -> dict:
     if manifest is None:
         raise RuntimeError("no anomaly model; run python -m ai.train_all")
     with connect(settings.postgres_dsn) as conn:
-        faulty = [r[0] for r in conn.execute("SELECT DISTINCT batch_id FROM fault_labels")]
+        # Only finished batches the historian holds from start to end (not a live batch).
+        faulty = [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT f.batch_id FROM fault_labels f "
+                "JOIN uns_events e ON e.batch_id = f.batch_id "
+                "AND e.payload -> 'v' ->> 'kind' = 'BATCH_END'"
+            )
+        ]
     clean = manifest["trained_on"]
     with pools.pool(_init, (settings,)) as pool:
         fault_results = list(pool.map(_score, faulty))

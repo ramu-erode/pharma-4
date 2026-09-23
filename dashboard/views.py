@@ -3,7 +3,7 @@ import: `dashboard/app.py` wires these into navigation, and tests render them on
 
 Live, Alerts, Yield, Graph and UNS browser pages, plus a Demo sidebar that drives the
 simulator through `_sim/cmd` and a DCS console for operator setpoint changes. There is
-no Apply button on a recommendation: a person enters the change (ADR-0012, ADR-0014).
+no Apply button on a recommendation: a person enters the change (ADR-0012, ADR-0015).
 """
 
 from __future__ import annotations
@@ -312,7 +312,7 @@ def page_yield() -> None:
         st.subheader("Current recommendation")
         if rec is None:
             st.caption(
-                "None: the gain the ensemble agrees on is below the gate (P10 > 0, median ≥ 0.1 g/L)."
+                "None: the gain the DoE response surface can vouch for is below the gate (P10 > 0, median ≥ 0.1 g/L)."
             )
         else:
             r = rec.v
