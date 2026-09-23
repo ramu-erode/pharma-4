@@ -1,0 +1,28 @@
+# The simulator's "DCS configuration": which raw tags each bioreactor exposes and which
+# simulator variable feeds them. Raw tag = <device>.<suffix>, device = BR101 / BR102.
+#
+# This file and edge/tag-map.yaml are deliberately independent (ADR-0005, Q22): the tag
+# map is the commissioning artifact. tests/edge/test_tag_map.py checks every tag here is
+# mapped, except those listed in expected_unmapped.
+units: [BR-101, BR-102]
+
+tags:
+  TIC-101.PV: temp
+  TIC-101.SP: temp_sp
+  AIC-102.PV: ph
+  AIC-102.SP: ph_sp
+  AIC-103.PV: do
+  AIC-103.SP: do_sp
+  SIC-104.PV: agitation
+  FQI-105.PV: feed_total
+  FIC-106.PV: air
+  FIC-107.PV: o2
+  FIC-108.PV: co2
+  FQI-109.PV: base_total
+  PIC-110.PV: pressure
+  WIT-111.PV: weight
+  TI-199.PV: spare_rtd
+
+# A spare RTD wired to the DCS but never commissioned into the UNS. It keeps the
+# edge/unmapped dead letter demonstrably in use.
+expected_unmapped: [TI-199.PV]

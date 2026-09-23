@@ -185,7 +185,7 @@ Record measured budgets (engine time per batch, backfill time, DB size, harness 
 
 | Metric | Budget | Measured |
 | --- | --- | --- |
-| Engine, 1 batch at 5 s step | ≤ 2 s | — |
+| Engine, 1 batch at 5 s step | ≤ 2 s | 1.25 s process + control only; 2.07 s including all 313k raw samples (2026-09-23) |
 | Backfill, 200 batches, 8 cores | < 10 min | — |
 | TimescaleDB size after compression | ≤ 3 GB | — |
 | Fault harness | < 60 s | — |

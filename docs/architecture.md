@@ -111,7 +111,7 @@ The simulator models a 14-day CHO fed-batch run producing a monoclonal antibody.
 
 **Operations and phases** (ADR-0011). Operations run in sequence: Setup → Inoculation → Growth (day 0 to the shift) → TempShift → Production → Harvest. Within each operation, phases run **in parallel**: `TEMP_CTRL`, `PH_CTRL` (drives CO2 and the base pump), `DO_CTRL` (agitation, air, O2) and `FEED_ADD`. Each phase can be `RUNNING`, `HELD` or `COMPLETE`, and the simulator emits occasional HOLDs.
 
-**Dynamics.** Cell growth follows a Monod/logistic model with glucose uptake and lactate production. Final titer depends on the integral of viable cells, the temperature-shift day, the production temperature, the pH band held, DO stability and feed volume, plus noise. `simulator.truth` exposes the ground-truth titer function for evaluating the optimizer.
+**Dynamics** (`simulator/process.py`). Cell growth follows a Monod/logistic model with glucose uptake, lactate production and consumption, and a lumped feed nutrient (amino acids) that specific productivity depends on. Final titer depends on the integral of viable cells, the temperature-shift day, the production temperature, the pH band held, DO stability and feed volume, plus per-batch variation in the cells. Each lever has a real interior optimum: too little feed starves productivity, too much raises osmolality and kills cells. Tests hold the optima inside the PARs (`tests/simulator/test_process.py`). `simulator.truth` exposes the ground-truth titer function for evaluating the optimizer.
 
 **Batch outcomes.** `Batch.status` is `COMPLETE`, `ABORTED` or `EARLY_HARVEST`. The simulator applies explicit rules: contamination signature → ABORTED; viability below 60% → EARLY_HARVEST. An ABORTED batch has `titer = null` and `disposition = REJECTED`.
 
@@ -119,12 +119,12 @@ The simulator models a 14-day CHO fed-batch run producing a monoclonal antibody.
 
 | Fault | What the simulator does | What is observable | Why it matters |
 | --- | --- | --- | --- |
-| pH probe drift | Probe offset grows +0.02 pH/h; the loop holds the *measured* PV at SP, so the true pH falls | PV flat at SP; CO2 flow rising; base flat; `lab/ph_offline` diverges from PV | The PV looks perfect while the culture drifts |
-| DO sparger fouling | Oxygen transfer coefficient decays | Agitation climbs to max, O2 flow rises, DO still sags | Oxygen limitation cuts growth |
+| pH probe drift | Probe offset grows +0.02 pH/h; the loop holds the *measured* PV at SP, so the true pH falls. It ends when the next daily blood-gas check disagrees with the probe by more than 0.1 and the operator recalibrates | PV flat at SP; CO2 flow rising; base flat; `lab/ph_offline` diverges from PV | The PV looks perfect while the culture drifts |
+| DO sparger fouling | Oxygen transfer coefficient decays to 4% (time constant 8 h) | Agitation climbs to max, O2 flow rises to max, DO still sags | Oxygen limitation cuts growth |
 | Temperature control loss | Loop tuning degrades | Temperature oscillates ±0.8 °C | Stresses cells, lowers titer |
 | Feed pump failure | Pump stops on a feed day | Feed total flat, weight flat, glucose falls next lab | Glucose depletes, viability falls |
-| Stuck sensor | One PV repeats its exact last value | Bit-identical heartbeat values | Classic data-quality issue |
-| Contamination (rare) | Foreign growth | DO and pH drop together, lactate spikes | Batch loss (ABORTED) |
+| Stuck sensor | One analog PV repeats its exact last value for 24 h (until maintenance) | Bit-identical heartbeat values | Classic data-quality issue |
+| Contamination (rare) | Foreign growth that consumes oxygen and makes acid | DO and pH drop together; the confirming sample at the abort shows the lactate spike | Batch loss (ABORTED) |
 
 The stuck-sensor fault sets `q = UNCERTAIN` only when the simulator's device-side check happens to notice it, so the AI still has something to catch.
 
@@ -172,7 +172,7 @@ _sim/                                       # outside the UNS; does not exist in
   faults/<unit>                             # ground-truth labels
 ```
 
-**Payload** (ADR-0002, ADR-0013). Every payload carries all six keys. `v` is typed per topic class in `common/models.py`: a float for `pv`, `sp`, `lab` and `ai/anomaly/score`; a string enum for `state/*`; a nested model for events, alerts and recommendations. `unit` is null where it does not apply. `src` is one of `sim`, `edge`, `anomaly`, `yield`, `operator`.
+**Payload** (ADR-0002, ADR-0013). Every payload carries all six keys. `v` is typed per topic class in `common/models.py`: a float for `pv`, `sp`, `lab` and `ai/anomaly/score`; a string enum for `state/*`; a nested model for events, alerts and recommendations. `unit` is null where it does not apply. `src` is one of `sim`, `edge`, `anomaly`, `yield`, `operator`. `historian`, `graph-sync` and `dashboard` also exist, but only as the source of those services' own heartbeats. Commands on `_sim/cmd/*` carry `src = operator`, because a person issues them.
 
 ```json
 { "v": 7.03, "ts": "2026-09-22T10:15:05.000Z", "unit": "pH",
@@ -197,18 +197,26 @@ _sim/                                       # outside the UNS; does not exist in
 | `events/*`, `_sim/cmd/*`, `_sim/faults/*` | 1 | no | Event streams; history lives in the DB and graph |
 | `ai/anomaly/alert/*`, `ai/yield/recommendation` | 1 | yes | The open set; cleared with an empty retained message |
 | `ai/anomaly/score`, `ai/yield/prediction` | 0 | yes | Latest value is what matters |
+| `edge/raw/*` | 0 | no | Raw stream into the adapter |
+| `edge/unmapped`, `_sim/clock` | 1 | yes | A browser always shows the latest one |
 
-**ACL** (allowlist; every service has its own user)
+This table lives in code as `common.uns.delivery()`.
+
+**ACL** (allowlist; every service has its own user; source of truth: `mosquitto/acl`, checked by `tests/test_acl.py` and, against the live broker, `tests/test_broker.py`)
 
 | User | Write | Read |
 | --- | --- | --- |
 | simulator | `edge/raw/#`, `…/lab/#`, `…/state/#`, `…/events/#`, `_sim/clock`, `_sim/faults/#`, `_meta/simulator/#` | `_sim/cmd/#`, `…/state/#` |
-| edge-adapter | `…/pv/#`, `…/sp/#`, `edge/unmapped`, `_meta/tags/#`, `_meta/edge/#` | `edge/raw/#`, `…/state/batch` |
+| edge-adapter | `…/pv/#`, `…/sp/#`, `edge/unmapped`, `_meta/tags/#`, `_meta/edge-adapter/#` | `edge/raw/#`, `…/state/batch` |
 | historian | `_meta/historian/#` | `pharmaco/#`, `_sim/faults/#` |
 | graph-sync | `_meta/graph-sync/#` | `pharmaco/#` (pv unused), `_sim/faults/#` |
 | anomaly | `…/ai/anomaly/#`, `_meta/anomaly/#` | `pharmaco/#` — **no `_sim/#`** |
 | yield | `…/ai/yield/#`, `_meta/yield/#` | `pharmaco/#` — **no `_sim/#`** |
-| dashboard | `_sim/cmd/#` | `pharmaco/#`, `edge/#`, `_sim/clock`, `_sim/faults/#` |
+| dashboard | `_sim/cmd/#`, `_meta/dashboard/#` | `pharmaco/#`, `edge/#`, `_sim/clock`, `_sim/faults/#` |
+| healthcheck | — | `$SYS/#` (compose healthcheck only) |
+| explorer | — | `#` (a person with MQTT Explorer; never a service) |
+
+Heartbeat topics use the compose service name: `pharmaco/_meta/<service>/status`, so the edge adapter's is `_meta/edge-adapter/status`.
 
 **Rules that keep the UNS clean**
 
@@ -226,7 +234,7 @@ The edge adapter sits between the "plant" and the UNS and does the contextualisa
 - **Direct to UNS:** `lab/*`, `state/*`, `events/*`, published by the simulator standing in for LIMS and MES.
 - **Not in the adapter:** fault detection, graph sync, anomaly and yield logic.
 
-**Raw input.** `edge/raw/BR101/<tag>`, flat payload: `{"tag":"BR101.AIC-102.PV","value":7.03,"t":"2026-09-22T10:15:05Z"}`.
+**Raw input.** `edge/raw/BR101/<tag>`, flat payload: `{"tag":"BR101.AIC-102.PV","value":7.03,"t":"2026-09-22T10:15:05.000Z","q":"GOOD"}`. `q` is the DCS status bit, which the adapter carries into the UNS `q`.
 
 **Tag map.** `edge/tag-map.yaml` is authored as an independent commissioning artifact. The simulator has its own DCS configuration, `simulator/dcs_tags.yaml`. A coverage test asserts that every simulator tag is mapped, except those on an explicit `expected_unmapped` list. `TI-199.PV` (a spare RTD) ships unmapped on purpose, so `edge/unmapped` always has something to show.
 

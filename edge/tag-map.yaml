@@ -1,0 +1,26 @@
+# Edge tag map: the commissioning artifact that turns raw DCS tags into UNS topics
+# (ADR-0005). Authored independently of simulator/dcs_tags.yaml; the coverage test in
+# tests/edge/test_tag_map.py keeps the two honest.
+#
+# UNS prefix comes from the device: BR101 -> pharmaco/<site>/<area>/<line>/BR-101.
+# deadband: publish when |value - last published| > deadband, or when the floor
+# interval (DEADBAND_FLOOR_S, simulated seconds) has passed (ADR-0009).
+devices:
+  BR101: BR-101
+  BR102: BR-102
+
+tags:
+  TIC-101.PV: {class: pv, name: temperature, unit: "°C", deadband: 0.05}
+  TIC-101.SP: {class: sp, name: temperature, unit: "°C", deadband: 0.001}
+  AIC-102.PV: {class: pv, name: ph, unit: pH, deadband: 0.01}
+  AIC-102.SP: {class: sp, name: ph, unit: pH, deadband: 0.001}
+  AIC-103.PV: {class: pv, name: do, unit: "% air sat.", deadband: 0.5}
+  AIC-103.SP: {class: sp, name: do, unit: "% air sat.", deadband: 0.001}
+  SIC-104.PV: {class: pv, name: agitation, unit: rpm, deadband: 1.0}
+  FQI-105.PV: {class: pv, name: feed_total, unit: L, deadband: 0.5}
+  FIC-106.PV: {class: pv, name: air_flow, unit: L/min, deadband: 0.02}
+  FIC-107.PV: {class: pv, name: o2_flow, unit: L/min, deadband: 0.02}
+  FIC-108.PV: {class: pv, name: co2_flow, unit: L/min, deadband: 0.01}
+  FQI-109.PV: {class: pv, name: base_total, unit: mL, deadband: 10.0}
+  PIC-110.PV: {class: pv, name: pressure, unit: mbar, deadband: 1.0}
+  WIT-111.PV: {class: pv, name: weight, unit: kg, deadband: 2.0}

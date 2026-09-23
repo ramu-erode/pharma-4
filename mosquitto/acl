@@ -1,0 +1,60 @@
+# Mosquitto ACL: an allowlist, one user per service (architecture.md, "ACL").
+# `write` = publish, `read` = subscribe/receive, `readwrite` = both.
+# Only the owner of a branch may write it. The AI services get no `_sim/#` access at all,
+# so ground-truth fault labels cannot leak into the models (ADR-0012).
+# Every change here needs a matching change in tests/test_acl.py expectations.
+
+user simulator
+topic write edge/raw/#
+topic write pharmaco/+/+/+/+/lab/#
+topic readwrite pharmaco/+/+/+/+/state/#
+topic write pharmaco/+/+/+/+/events/#
+topic readwrite _sim/clock
+topic write _sim/faults/#
+topic read _sim/cmd/#
+topic write pharmaco/_meta/simulator/#
+
+user edge-adapter
+topic read edge/raw/#
+topic read pharmaco/+/+/+/+/state/batch
+topic write pharmaco/+/+/+/+/pv/#
+topic write pharmaco/+/+/+/+/sp/#
+topic write edge/unmapped
+topic write pharmaco/_meta/tags/#
+topic write pharmaco/_meta/edge-adapter/#
+
+user historian
+topic read pharmaco/#
+topic read _sim/faults/#
+topic write pharmaco/_meta/historian/#
+
+user graph-sync
+topic read pharmaco/#
+topic read _sim/faults/#
+topic write pharmaco/_meta/graph-sync/#
+
+user anomaly
+topic read pharmaco/#
+topic write pharmaco/+/+/+/+/ai/anomaly/#
+topic write pharmaco/_meta/anomaly/#
+
+user yield
+topic read pharmaco/#
+topic write pharmaco/+/+/+/+/ai/yield/#
+topic write pharmaco/_meta/yield/#
+
+user dashboard
+topic read pharmaco/#
+topic read edge/#
+topic read _sim/clock
+topic read _sim/faults/#
+topic write _sim/cmd/#
+topic write pharmaco/_meta/dashboard/#
+
+# Compose healthcheck only.
+user healthcheck
+topic read $SYS/#
+
+# Read-only, for MQTT Explorer and local debugging by a person.
+user explorer
+topic read #

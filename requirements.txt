@@ -1,0 +1,7 @@
+# Runtime dependencies for every service (ADR-0003: one dependency file).
+# Pinned exactly; add a dependency in the increment that first needs it.
+numpy==2.5.3
+paho-mqtt==2.1.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+pyyaml==6.0.3

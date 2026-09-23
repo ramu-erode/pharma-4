@@ -1,0 +1,32 @@
+# Recipe v1: the original tech-transfer process (2022-2023).
+# Read by the simulator (nominal levers, jitter) and graph-sync (PARs, spec limits).
+id: v1
+name: CHO-mAb fed-batch
+version: 1
+effective_from: 2022-01-01
+nominal:
+  shift_day: 6.0
+  prod_temp: 34.0
+  ph_sp: 7.05
+  do_sp: 40.0
+  feed_mult: 0.9
+# Proven acceptable ranges: the optimizer's bounds (ADR-0014). The same for every version.
+par:
+  shift_day: [4.0, 7.0]
+  prod_temp: [32.0, 35.0]
+  ph_sp: [6.90, 7.10]
+  do_sp: [30.0, 50.0]
+  feed_mult: [0.8, 1.2]
+# Run-to-run standard deviation of each lever in manufacturing batches.
+jitter:
+  shift_day: 0.15
+  prod_temp: 0.15
+  ph_sp: 0.01
+  do_sp: 1.5
+  feed_mult: 0.03
+# Spec limits on process values. `sp_relative` limits are offsets from the setpoint.
+limits:
+  temperature: {sp_relative: true, action: [-0.5, 0.5], alarm: [-1.0, 1.0]}
+  ph: {sp_relative: true, action: [-0.10, 0.10], alarm: [-0.20, 0.20]}
+  do: {sp_relative: false, action: [20.0, 80.0], alarm: [10.0, 100.0]}
+  pressure: {sp_relative: false, action: [40.0, 110.0], alarm: [30.0, 130.0]}
