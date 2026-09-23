@@ -420,10 +420,11 @@ pharma-4/
 **TimescaleDB**
 
 - `tag_values(ts, topic, batch_id, value, quality)`: hypertable for every scalar `v`
-- `tag_values_1m`: continuous aggregate, **for dashboard charts only**
+- `tag_values_1m`: continuous aggregate, **for dashboard charts only**. Real-time mode; only the last 30 days are materialised, older history is aggregated at query time from the compressed raw data
 - `uns_events(ts, topic, batch_id, payload jsonb)`: structured messages (events, alerts, recommendations)
 - `tag_attribution(...)`: projected by graph-sync
-- `fault_labels(unit, batch_id, fault, onset, end, params)`: ground truth, for evaluation only
+- `fault_labels(id, cell, batch_id, fault, onset, end, params)`: ground truth, for evaluation only
+- `bootstrap_state(key, value)`: what the one-shot bootstrap has done (backfill end instant, completion)
 
 **Dashboard pages**
 

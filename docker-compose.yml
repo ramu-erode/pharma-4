@@ -22,6 +22,28 @@ x-python-env: &python-env
   BOLT_URI: bolt://neo4j:7687
 
 services:
+  # One-shot first start: migrations, backfill (and later graph load and training).
+  # Idempotent; services that need its results wait for it to complete (ADR-0010).
+  bootstrap:
+    <<: *python
+    restart: "no"
+    command: ["python", "-m", "bootstrap.run"]
+    environment:
+      <<: *python-env
+      SERVICE: bootstrap
+    depends_on:
+      timescaledb: {condition: service_healthy}
+
+  historian:
+    <<: *python
+    command: ["python", "-m", "historian.writer"]
+    environment:
+      <<: *python-env
+      SERVICE: historian
+    depends_on:
+      mosquitto: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+
   simulator:
     <<: *python
     command: ["python", "-m", "simulator.run"]

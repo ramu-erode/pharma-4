@@ -88,6 +88,8 @@ These follow from the ADRs, and the plan leans on them throughout.
 | 2.5 | `backfill.py`: plan → `multiprocessing.Pool` over batches → `engine.run_batch` → `edge.core` map + deadband → `historian.core.route` → COPY in chunks. Graph writes are added in increment 3. Honours `BACKFILL_BATCHES`. | `simulator/backfill.py` |
 | 2.6 | `bootstrap/run.py`: an idempotent sequence (migrate → backfill if `tag_values` is empty → *graph and training steps added in increments 3–5*), with a clear log per step. Compose service `bootstrap` (`restart: "no"`), and `historian` depending on it. | `bootstrap/run.py`, `docker-compose.yml` |
 
+**As built:** idempotency uses a `bootstrap_state` table (migration 007) rather than "`tag_values` is empty". It records the plan's end instant, so an interrupted backfill is redone with the same batches, and backfill owns every row before that instant. The 1-minute aggregate materialises only the last 30 days; older history is served in real-time mode from compressed raw data (materialising all of it measured 2.5 GB).
+
 **Budgets to measure and record in this file:** backfill of 200 batches in under 10 minutes on an 8-core laptop; TimescaleDB at most 3 GB after compression. If either is missed, first reduce `tag_values` width (a `topic_id smallint` through a `topics` table) before touching the publish period.
 
 **Tests:** route selection per topic class; the campaign plan (counts, date order, LHS coverage of every PAR, about 15% faults, no reactor overlap); backfill on 3 batches into a throwaway schema (skipped when no DB is available); bootstrap run twice is a no-op the second time.
@@ -186,7 +188,7 @@ Record measured budgets (engine time per batch, backfill time, DB size, harness 
 | Metric | Budget | Measured |
 | --- | --- | --- |
 | Engine, 1 batch at 5 s step | ≤ 2 s | 1.25 s process + control only; 2.07 s including all 313k raw samples (2026-09-23) |
-| Backfill, 200 batches, 8 cores | < 10 min | — |
-| TimescaleDB size after compression | ≤ 3 GB | — |
+| Backfill, 200 batches, 8 cores | < 10 min | 86 s on 12 cores (76 s simulate, 9 s compress); clean `docker compose up` to bootstrap complete: 91 s (2026-09-23) |
+| TimescaleDB size after compression | ≤ 3 GB | 141 MB database, 115 MB `tag_values` for 7.24M rows (2026-09-23) |
 | Fault harness | < 60 s | — |
 | False alerts per clean batch | < 1 | — |
