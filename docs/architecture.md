@@ -335,15 +335,15 @@ Three layers, from simple and explainable to learned and multivariate (ADR-0014)
 
 **Features** (`ai/features.py`, one function for both training and live scoring). Raw deadbanded values are resampled to a 1-simulated-minute grid with last-observation-carried-forward. 30-minute windows, advanced every 5 minutes, produce: mean, slope and std of each PV; PV − SP error; base, feed and CO2 rates from cumulative totals; agitation-to-DO ratio; time since the last feed bolus; operation; batch age. A parity test asserts that training and live produce identical features.
 
-**Batch-evolution alignment.** A culture changes all the time, so each feature is centred and scaled by its mean and std **for clean batches at the same batch age** (1-h bins), per operation, before PCA and Isolation Forest see it.
+**Batch-evolution alignment.** A culture changes all the time, so each feature is centred and scaled by its mean and std **for clean batches at the same batch age** (hours since inoculation, 1-h bins), per operation, before PCA and Isolation Forest see it. Batch age, not time since the operation started, keeps the daily feed bolus in the same bin for every batch. A bin pools its neighbours only until it spans 8 training batches. Where fewer than 8 training batches reached that age within the operation (its ragged ends, around a shift day that varies batch to batch), layers 2–3 do not score: there is no reference population.
 
-**Suppression.** Layers 2–3 are suppressed for TempShift ±2 h, and for tags whose controlling phase is `HELD` (role and state from `tag_attribution` or the live `state/phase/*`). Layer 1 always runs.
+**Suppression.** Layers 2–3 are suppressed during TempShift and for 2 h after it, outside the model's age coverage, and for tags whose controlling phase is `HELD` (bindings read once per batch from the graph; phase state from `events/batch`). Layer 1 always runs.
 
-**Training.** On clean historical batches only, one model per operation. Thresholds at the 99th percentile of training scores.
+**Training** (`python -m ai.train_all`, run by bootstrap when the training set changes). On clean **manufacturing batches of the current recipe** only, the way MSPC models describe the process as it now runs. Characterisation batches are excluded because their setpoints are deliberately spread across the PARs. One model per operation (Growth, Production). **Thresholds are cross-fitted:** five folds, each fold scored by a model fitted on the other four. A channel's threshold is the 97th percentile of each batch's highest score held over two consecutive windows. That is the quantity the open-after-two rule reacts to; a per-window percentile would fire dozens of times per batch. Models live in the `models` volume with a JSON manifest (version, training batches, thresholds).
 
 **Alerts** (ADR-0013). Keyed `ai/anomaly/alert/<layer>-<tag|class>`. An alert opens after 2 consecutive windows over threshold and clears after 4 under. It carries the score, layer, top 3 contributing tags and a suggested fault class. graph-sync keeps one Event per alert id.
 
-**Evaluation** against `fault_labels` (never visible to the service):
+**Evaluation** (`python -m ai.anomaly.evaluate`, report in `models/anomaly_eval.json`) against `fault_labels` (never visible to the service), plus the fault harness in `tests/ai`. Per-fault success criteria: developing faults (pH drift, fouling, contamination) must alert before the true process breaches spec. Abrupt ones get a maximum delay: temperature loss 90 min, stuck sensor 60 min, feed pump 3 h after the first missed bolus.
 
 - Detection rate per fault type
 - Lead time: alert open versus the simulator's true spec-breach time

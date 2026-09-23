@@ -90,11 +90,7 @@ def plan(n: int, end: datetime, seed: int) -> Plan:
             )
             campaign = Campaign.PC
         else:
-            jittered = {
-                k: getattr(recipe.nominal, k) + float(rng.normal(0.0, recipe.jitter[k]))
-                for k in LEVER_NAMES
-            }
-            levers = recipe.clip(Levers(**jittered))
+            levers = jittered(recipe, rng)
             campaign = Campaign.MFG
         batch_rng = np.random.default_rng([seed, seq])
         specs.append(
@@ -111,6 +107,40 @@ def plan(n: int, end: datetime, seed: int) -> Plan:
             )
         )
     return Plan(tuple(specs))
+
+
+def jittered(recipe: recipes.Recipe, rng: np.random.Generator) -> Levers:
+    """A manufacturing batch's levers: nominal plus run-to-run jitter, inside the PARs."""
+    values = {
+        k: getattr(recipe.nominal, k) + float(rng.normal(0.0, recipe.jitter[k]))
+        for k in LEVER_NAMES
+    }
+    return recipe.clip(Levers(**values))
+
+
+def manufacturing(
+    recipe_id: str, n: int, first_start: datetime, seed: int, first_seq: int = 9000
+) -> list[b.BatchSpec]:
+    """`n` fault-free manufacturing batches of one recipe (test harness, experiments)."""
+    rng = np.random.default_rng([seed, 2])
+    recipe = recipes.get(recipe_id)
+    specs = []
+    for i in range(n):
+        start = first_start + CYCLE * (i // 2) + (CYCLE / 2) * (i % 2)
+        batch_rng = np.random.default_rng([seed, first_seq + i])
+        specs.append(
+            b.BatchSpec(
+                batch_id=b.batch_id(start, (first_seq + i) % 10000),
+                cell=CELLS[i % 2],
+                start=start,
+                recipe_id=recipe_id,
+                campaign=Campaign.MFG,
+                levers=jittered(recipe, rng),
+                seed=int(batch_rng.integers(2**31)),
+                traits=b.draw_traits(batch_rng),
+            )
+        )
+    return specs
 
 
 def _pc_indices(n: int) -> list[int]:

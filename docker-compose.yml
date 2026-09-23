@@ -20,6 +20,7 @@ x-python-env: &python-env
   MQTT_HOST: mosquitto
   POSTGRES_HOST: timescaledb
   BOLT_URI: bolt://neo4j:7687
+  MODELS_DIR: /models
 
 services:
   # One-shot first start: migrations, backfill (and later graph load and training).
@@ -31,6 +32,8 @@ services:
     environment:
       <<: *python-env
       SERVICE: bootstrap
+    volumes:
+      - models:/models
     depends_on:
       timescaledb: {condition: service_healthy}
       neo4j: {condition: service_healthy}
@@ -51,6 +54,18 @@ services:
     environment:
       <<: *python-env
       SERVICE: graph-sync
+    depends_on:
+      mosquitto: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+
+  anomaly:
+    <<: *python
+    command: ["python", "-m", "ai.anomaly.service"]
+    environment:
+      <<: *python-env
+      SERVICE: anomaly
+    volumes:
+      - models:/models:ro
     depends_on:
       mosquitto: {condition: service_healthy}
       bootstrap: {condition: service_completed_successfully}
@@ -118,6 +133,7 @@ services:
       start_period: 20s
 
 volumes:
+  models:
   mosquitto-data:
   timescale-data:
   neo4j-data:

@@ -5,7 +5,7 @@
 3. backfill the historical batches, unless already complete
 4. replay into the graph any batch the historian has and the graph lacks, and project
    its attribution (so a Neo4j reset heals itself)
-   (increments 4-5 add: model training)
+5. train the AI models if their training data changed (increment 5 adds the yield model)
 
     python -m bootstrap.run
 
@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import time
 
+from ai import train_all
 from common.settings import get_settings
 from graph import db as graph_db
 from graph import load, replay
@@ -32,19 +33,21 @@ def main() -> None:
     settings = get_settings()
     t0 = time.perf_counter()
     with connect(settings.postgres_dsn, wait_s=120) as conn, graph_db.connect(settings) as driver:
-        log.info("step 1/4: TimescaleDB migrations")
+        log.info("step 1/5: TimescaleDB migrations")
         migrate(conn)
-        log.info("step 2/4: graph schema and configuration")
+        log.info("step 2/5: graph schema and configuration")
         graph_db.run_each(driver, load.schema_statements())
         graph_db.run_all(
             driver, load.config_statements(settings.site, settings.area, settings.line)
         )
-        log.info("step 3/4: backfill (%d batches)", settings.backfill_batches)
+        log.info("step 3/5: backfill (%d batches)", settings.backfill_batches)
         backfill.run(conn, settings)
         missing = replay.missing_batches(conn, driver)
-        log.info("step 4/4: graph replay (%d batches missing)", len(missing))
+        log.info("step 4/5: graph replay (%d batches missing)", len(missing))
         if missing:
             replay.replay(conn, driver, missing)
+        log.info("step 5/5: model training")
+        train_all.train_anomaly(conn, settings)
     log.info("bootstrap complete in %.0f s", time.perf_counter() - t0)
 
 

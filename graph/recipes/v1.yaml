@@ -28,5 +28,5 @@ jitter:
 limits:
   temperature: {sp_relative: true, action: [-0.5, 0.5], alarm: [-1.0, 1.0]}
   ph: {sp_relative: true, action: [-0.10, 0.10], alarm: [-0.20, 0.20]}
-  do: {sp_relative: false, action: [20.0, 80.0], alarm: [10.0, 100.0]}
+  do: {sp_relative: false, action: [20.0, 105.0], alarm: [10.0, 110.0]}  # low density: DO rides above SP
   pressure: {sp_relative: false, action: [40.0, 110.0], alarm: [30.0, 130.0]}

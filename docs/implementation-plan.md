@@ -131,7 +131,7 @@ These follow from the ADRs, and the plan leans on them throughout.
 | 4.7 | `detector.py` (pure): `Detector.step(window, context) -> list[AlertChange]`, applying suppression (TempShift ±2 h; tags whose controlling phase is HELD). | `ai/anomaly/detector.py` |
 | 4.8 | Training plus a model manifest (data hash, library versions, seed) saved with joblib to the `models` volume; `ai/train_all.py`; bootstrap trains when the manifest hash differs. | `ai/anomaly/train.py`, `ai/train_all.py` |
 | 4.9 | Service shell: subscribes to `pharmaco/#` (it has no ACL access to `_sim`), a rolling buffer per unit, the per-batch context from Neo4j on `events/batch` start, scoring every 5 simulated minutes; publishes the score and alerts. Compose service `anomaly`. | `ai/anomaly/service.py` |
-| 4.10 | `notebooks/model_eval.ipynb`: detection rate per fault, lead time against the true spec breach, false alerts per clean batch. | `notebooks/model_eval.ipynb` |
+| 4.10 | **As built:** `python -m ai.anomaly.evaluate`, a module rather than a notebook, so the dashboard can read its JSON report: detection and delay per fault type over the historical labels, false alerts per clean batch. | `ai/anomaly/evaluate.py` |
 
 **Tests:**
 
@@ -192,5 +192,5 @@ Record measured budgets (engine time per batch, backfill time, DB size, harness 
 | Engine, 1 batch at 5 s step | ≤ 2 s | 1.25 s process + control only; 2.07 s including all 313k raw samples (2026-09-23) |
 | Backfill, 200 batches, 8 cores | < 10 min | 86 s on 12 cores (76 s simulate, 9 s compress); clean `docker compose up` to bootstrap complete: 91 s (2026-09-23) |
 | TimescaleDB size after compression | ≤ 3 GB | 141 MB database, 115 MB `tag_values` for 7.24M rows (2026-09-23) |
-| Fault harness | < 60 s | — |
-| False alerts per clean batch | < 1 | — |
+| Fault harness | < 60 s | 42 s on 12 cores (48 simulated batches) (2026-09-23) |
+| False alerts per clean batch | < 1 | 0.75 out of sample (harness); history: 30/30 labelled faults detected (2026-09-23) |

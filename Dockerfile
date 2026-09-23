@@ -13,5 +13,8 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-RUN useradd --system --uid 10001 app
+RUN useradd --system --uid 10001 app \
+    # Docker seeds a new named volume from the image's mount point, ownership included,
+    # so the models volume is writable by the service user.
+ && mkdir -p /models && chown app /models
 USER app

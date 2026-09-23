@@ -1,9 +1,11 @@
 # Runtime dependencies for every service (ADR-0003: one dependency file).
 # Pinned exactly; add a dependency in the increment that first needs it.
+joblib==1.6.0
 neo4j==6.3.1
 numpy==2.5.3
 paho-mqtt==2.1.0
 psycopg[binary]==3.3.6
-pydantic==2.13.5
 pydantic-settings==2.15.0
+pydantic==2.13.5
 pyyaml==6.0.3
+scikit-learn==1.9.1

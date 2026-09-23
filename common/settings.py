@@ -53,6 +53,8 @@ class Settings(BaseSettings):
 
     backfill_batches: int = Field(default=200, ge=1)
 
+    models_dir: str = "models"  # trained models and their manifests (a volume in compose)
+
     def mqtt_credentials(self, service: str | None = None) -> tuple[str, str | None]:
         """Username and password for `service` (default: SERVICE from the environment).
 
