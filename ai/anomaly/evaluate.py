@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +21,7 @@ from ai import store
 from ai.anomaly import train
 from ai.context import controlled_by_config
 from ai.offline import from_history, to_input
+from common import pools
 from common.settings import Settings, get_settings
 from historian.migrate import connect
 
@@ -68,7 +68,7 @@ def evaluate(settings: Settings) -> dict:
     with connect(settings.postgres_dsn) as conn:
         faulty = [r[0] for r in conn.execute("SELECT DISTINCT batch_id FROM fault_labels")]
     clean = manifest["trained_on"]
-    with ProcessPoolExecutor(initializer=_init, initargs=(settings,)) as pool:
+    with pools.pool(_init, (settings,)) as pool:
         fault_results = list(pool.map(_score, faulty))
         clean_results = list(pool.map(_score, clean))
 

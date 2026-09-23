@@ -19,6 +19,7 @@ from ai.anomaly.windows import batch_windows
 from ai.context import Context, controlled_by_config
 from ai.features import Series, signal_of_topic
 from common import models as m
+from common.levers import actual_levers
 from common.settings import Settings
 from common.uns import UnitPath
 from edge.core import Deadband, Mapped, TagMap, map_and_enrich
@@ -36,6 +37,8 @@ class Collected:
     truth: list[TruthOut] = field(default_factory=list)
     labels: list[m.FaultLabel] = field(default_factory=list)
     status: m.BatchStatus | None = None
+    lab: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+    levers: m.Levers | None = None  # actual: planned + operator changes (common.levers)
 
 
 def limits_for(recipe_id: str) -> dict[str, Limit]:
@@ -55,6 +58,19 @@ class Collector:
         self.recipe_id = "v3"
         self.labels: list[m.FaultLabel] = []
         self.status: m.BatchStatus | None = None
+        self.lab: dict[str, list[tuple[float, float]]] = {}
+        self.planned: m.Levers | None = None
+        self.operator_events: list[m.OperatorEvent] = []
+
+    @property
+    def levers(self) -> m.Levers | None:
+        return actual_levers(self.planned, self.operator_events) if self.planned else None
+
+    def collected(self, truth: list[TruthOut] | None = None) -> Collected:
+        return Collected(
+            self.series, self.ctx, self.recipe_id, truth or [], self.labels, self.status,
+            self.lab, self.levers,
+        )  # fmt: skip
 
     def minute(self, ts: datetime) -> float:
         return (ts - self.series.origin).total_seconds() / 60.0
@@ -63,6 +79,8 @@ class Collector:
         sig = signal_of_topic(topic)
         if sig is not None:
             self.series.add(sig, ts, value, q != "GOOD")
+        elif "/lab/" in topic:
+            self.lab.setdefault(topic.rsplit("/", 1)[1], []).append((self.minute(ts), value))
 
     def message(self, topic: str, payload: BaseModel) -> None:
         if isinstance(payload, m.ScalarPayload):
@@ -72,6 +90,7 @@ class Collector:
             match ev:
                 case m.BatchStarted():
                     self.recipe_id = ev.recipe
+                    self.planned = ev.planned_levers
                 case m.OperationChanged():
                     self.ctx.open_operation(ev.current.value, t)
                 case m.PhaseChanged(state=m.PhaseState.HELD):
@@ -80,6 +99,8 @@ class Collector:
                     self.ctx.release(ev.phase.value, t)
                 case m.BatchEnded():
                     self.status = ev.status
+        elif isinstance(payload, m.OperatorEventPayload):
+            self.operator_events.append(payload.v)
         elif isinstance(payload, m.FaultLabelPayload):
             self.labels = [x for x in self.labels if x.id != payload.v.id] + [payload.v]
 
@@ -108,7 +129,7 @@ def from_engine(spec: BatchSpec, settings: Settings, tag_map: TagMap) -> Collect
         if topic.endswith("/state/batch"):
             batch_of_cell[spec.cell] = payload.v
         col.message(topic, payload)
-    return Collected(col.series, col.ctx, col.recipe_id, truth, col.labels, col.status)
+    return col.collected(truth)
 
 
 def from_history(conn: psycopg.Connection, batch_id: str) -> Collected:
@@ -129,8 +150,8 @@ def from_history(conn: psycopg.Connection, batch_id: str) -> Collected:
             col.message(topic, payload)
     for ts, topic, value, q in conn.execute(
         "SELECT ts, topic, value, quality FROM tag_values WHERE batch_id = %s "
-        "AND (topic LIKE %s OR topic LIKE %s) ORDER BY ts",
-        (batch_id, "%/pv/%", "%/sp/%"),
+        "AND (topic LIKE %s OR topic LIKE %s OR topic LIKE %s) ORDER BY ts",
+        (batch_id, "%/pv/%", "%/sp/%", "%/lab/%"),
     ):
         col.value(topic, ts, value, q)
     for fid, cell, fault, onset, end, params in conn.execute(
@@ -143,7 +164,7 @@ def from_history(conn: psycopg.Connection, batch_id: str) -> Collected:
                 params=params,
             )
         )  # fmt: skip
-    return Collected(col.series, col.ctx, col.recipe_id, [], col.labels, col.status)
+    return col.collected()
 
 
 def to_input(

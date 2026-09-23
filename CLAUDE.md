@@ -100,10 +100,13 @@ tests/       pytest suites mirroring the package layout
 ## Common commands
 
 ```bash
-docker compose up -d              # bring up broker, databases, services
+docker compose up -d              # bring up everything; the dashboard is on http://localhost:8501
 docker compose logs -f simulator  # follow one service
 python -m simulator.backfill      # re-generate the 200 historical batches (bootstrap does this on first up)
 python -m ai.train_all            # re-train anomaly and yield models (bootstrap does this on first up)
+python -m ai.anomaly.evaluate     # anomaly model vs ground-truth labels (writes models/anomaly_eval.json)
+python -m ai.yield_.evaluate      # optimizer vs the simulator's true titer (writes models/yield_eval.json)
+python -m graph.replay [--all]    # rebuild the graph from the historian
 python -m simulator.ctl --help    # demo control: start batch, inject fault, speed, run to day N
 pytest                            # run the test suite (fault harness is marked slow)
 pytest -m compose                 # smoke-test against the running stack

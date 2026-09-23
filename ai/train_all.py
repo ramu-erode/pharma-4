@@ -1,5 +1,8 @@
 """Train the AI models from TimescaleDB history (ADR-0011: training reads only TimescaleDB).
 
+The yield model is trained after the anomaly model: its "alerts so far" feature comes
+from running the anomaly model over history.
+
     python -m ai.train_all [--force]
 
 Anomaly model: fitted on clean manufacturing batches of the current recipe, the way
@@ -14,7 +17,6 @@ import argparse
 import logging
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor
 
 import psycopg
 
@@ -22,6 +24,8 @@ from ai import store
 from ai.anomaly import train
 from ai.context import controlled_by_config
 from ai.offline import from_history, to_input
+from ai.yield_.train import train_yield
+from common import pools
 from common.settings import Settings, get_settings
 from historian.migrate import connect
 
@@ -79,7 +83,7 @@ def train_anomaly(conn: psycopg.Connection, settings: Settings, force: bool = Fa
         return False
     t0 = time.perf_counter()
     workers = max(1, (os.cpu_count() or 2) - 1)
-    with ProcessPoolExecutor(workers, initializer=_init, initargs=(settings,)) as pool:
+    with pools.pool(_init, (settings,), workers) as pool:
         batches = list(pool.map(_extract, ids))
     log.info("extracted %d batches in %.0f s", len(batches), time.perf_counter() - t0)
     model = train.fit(batches, settings.seed)
@@ -108,6 +112,7 @@ def main() -> None:
     settings = get_settings()
     with connect(settings.postgres_dsn) as conn:
         train_anomaly(conn, settings, force=args.force)
+        train_yield(conn, settings, force=args.force)
 
 
 if __name__ == "__main__":

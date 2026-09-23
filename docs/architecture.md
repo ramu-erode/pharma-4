@@ -353,27 +353,39 @@ Three layers, from simple and explainable to learned and multivariate (ADR-0014)
 
 Advisory only (ADR-0014).
 
-**1. Mid-batch titer prediction**
+**1. Mid-batch titer prediction** (`ai/yield_/`)
 
-- **Model:** LightGBM, with a PLS regression baseline. A 20-member bootstrap ensemble gives the point estimate and paired gains; quantile models give the displayed P10/P50/P90.
-- **Training rows:** one per batch per day (days 3–12), excluding ABORTED batches. Features = trajectory summaries up to day d (integral of VCD, mean pH and temperature per operation, DO stability, cumulative feed and base, alerts so far — alerts, never labels) + the batch's **actual whole-batch lever values** + planned harvest day.
-- **Output:** `ai/yield/prediction` every 6 simulated hours.
-- **Evaluation:** RMSE and MAPE on held-out batches by batch day; the band should narrow as the batch progresses.
+- **Model:** LightGBM, with a PLS regression baseline. A 20-member bootstrap ensemble (batches resampled whole) gives the point estimate and paired gains; quantile models give the displayed P10/P50/P90.
+- **Target: the remaining gain**, i.e. final titer minus the titer measured so far (zero before day 5). What has been measured is then not the model's problem, and one model serves every batch day. On held-out batches this cut RMSE by 13–21% against predicting final titer directly, and made the error narrow as the batch runs.
+- **Training rows:** every half day from day 3 to 12 (or until harvest), excluding ABORTED batches. Features at day d: latest lab values, titer rate and a straight-line projection to day 14, integral of viable cells, growth rate, process summaries (temperature and pH error, DO stability, feed and base totals), **alerts so far** (from running the anomaly model over history offline; never labels), and the batch's **actual whole-batch lever values** (`common/levers.py`).
+- **Band calibration:** quantile trees fit their own training noise (the raw P10–P90 band covered 65% of held-out outcomes). The half-widths are stretched by a split-conformal factor measured on held-out batches (about 1.5), so the band covers about 80%.
+- **Output:** `ai/yield/prediction` every 6 simulated hours from day 3.
+- **Measured** (held out, 2026-09-23): ensemble RMSE 0.49 g/L at day 3 falling to 0.27 at day 12; PLS 0.49 to 0.41.
 
 **2. Setpoint optimization**
 
 - **Levers:** temperature-shift day (4–7), production temperature (32–35 °C), pH SP (6.90–7.10), DO SP (30–50%), feed multiplier (0.8–1.2). Bounds come from the recipe's PARs in the graph.
-- **Frozen versus open:** a lever whose window has passed (for example the shift day once it has happened) is fixed at its actual value; Optuna TPE searches only the open levers, using the ensemble as surrogate.
-- **Gate:** publish only if the ensemble's paired gain has P10 > 0 **and** median ≥ 0.1 g/L. Otherwise clear the retained recommendation.
+- **Frozen versus open:** the shift day is frozen once the batch has shifted (and can move no sooner than 6 h ahead); the others stay open. Optuna TPE searches only the open levers, within a **trust region** of 25% of each PAR's width around the current value, so the search stays near inputs the model has seen.
+- **Split ensemble:** ten members drive the search and the other ten, which played no part in choosing, judge the winner (against the optimizer's curse).
+- **Gate:** publish only if the judges' paired gain has P10 > 0 **and** median ≥ 0.1 g/L, and a lever actually moves. Otherwise clear the retained recommendation.
 - **Output:** `ai/yield/recommendation`, with current versus recommended values per lever, gain P10/P50/P90 and model version.
-- **Known limitation:** a mid-batch change to an open lever is approximated by the whole-batch value the model was trained on.
-- **Ground-truth check:** offline, `simulator.truth` scores how close the recommended levers get to the true optimum.
+- **Known limitation:** the optimizer changes a lever while holding the observed trajectory fixed, and a mid-batch change is approximated by the whole-batch value the model was trained on.
+
+**Ground-truth check** (`python -m ai.yield_.evaluate`, report in `models/yield_eval.json`). Fresh batches stop at day 4, take the recommendation, and the simulator says what following it *truly* gains. Measured on 2026-09-23 (4 batches each on recipes v1 and v3):
+
+| | v1 (far from the optimum) | v3 (near it) |
+| --- | --- | --- |
+| Predicted gain (P50) | +0.68 to +0.91 g/L | +0.25 to +0.68 g/L |
+| True gain | +0.20 to +0.57 g/L | 0.00 to +0.09 g/L |
+| Gate | open 4/4, all truly worth ≥ 0.1 g/L | open 4/4, none truly worth it |
+
+The advice points the right way and never lowered the true titer, but predicted gains run about **2.8× the true gains**, and the paired-gain gate cannot tell a near-optimal batch from one with room to improve. The bias is shared by every ensemble member, so neither the paired gain nor the split ensemble removes it. This is an open question for the design (see Build plan).
 
 **3. Acting on advice.** There is no Apply button. The operator uses the dashboard's **DCS console** (a `_sim/cmd/setpoint` stand-in), optionally citing the recommendation id. The simulator emits `events/operator`, and the graph links the action to the recommendation (ADR-0012).
 
-**4. Batch-level learning.** SHAP values rank which levers drive titer across all batches, shown beside the graph query linking levers to outcome by campaign. That is the process-understanding story that Quality by Design asks for.
+**4. Batch-level learning.** SHAP values (LightGBM's built-in TreeSHAP, so no `shap` dependency) rank what drives the remaining gain, shown beside the graph query linking levers to outcome by campaign. That is the process-understanding story that Quality by Design asks for.
 
-**Honest limits.** The simulator has a known ground-truth yield function, so optimizer quality is measurable here. Real plants will need far more batches, and a designed experiment is still the proper way to move a validated setpoint.
+**Honest limits.** The simulator has a known ground-truth yield function, so optimizer quality is measurable here, and the measurement above is the honest result. Real plants will need far more batches, and a designed experiment is still the proper way to move a validated setpoint.
 
 ## Storage, dashboard & service layout
 
@@ -434,12 +446,12 @@ pharma-4/
 **Dashboard pages**
 
 1. **Live**: tag trends per bioreactor with SP overlay; current operation and phase states
-2. **Alerts**: open alerts with contributing tags; T² / SPE charts
-3. **Yield**: predicted titer band over batch days, current recommendation, SHAP drivers
+2. **Alerts**: open alerts with contributing tags; the anomaly index over the batch (1.0 = threshold); the evaluation report against ground-truth labels
+3. **Yield**: predicted titer band over batch days, current recommendation, SHAP drivers, hold-out error by day, and the optimizer against ground truth
 4. **Graph**: preset Cypher queries, batch genealogy, phase bindings
 5. **UNS browser**: live topic tree, including `edge/raw` and `edge/unmapped`
 
-**Demo sidebar** (every page): start batch, inject or clear a fault, speed and pause, run to day N, and the **DCS console** for manual setpoint changes.
+**Demo sidebar** (every page): start batch (current or a named recipe), inject or clear a fault, speed and pause, run to day N, and the **DCS console** for manual setpoint changes. Pages live in `dashboard/views.py` (no import side effects, so each renders in a test); `dashboard/app.py` only wires navigation. Served on port 8501.
 
 ## Testing
 
@@ -489,5 +501,5 @@ TimescaleDB stays (ADR-0004). InfluxDB is only revisited if a client's stack req
 2. Start batch B2026-0200 on BR-101 from the Demo sidebar, at 3600×. Show live trends and the operation and phase states.
 3. Inject pH probe drift. The pH PV stays at 7.00, yet the EWMA on CO2 demand opens an alert, and the next `ph_offline` confirms it — hours before the true pH leaves the band. The alert appears as an Event in the graph.
 4. Run "alerts on low-titer batches by tag" to show that pH issues correlate with low yield.
-5. Run to day 4, then pause. Show the titer band and a recommendation (for example, shift on day 5 to 33 °C, with its gain). In the DCS console, the operator applies it, citing the recommendation. Resume, and watch the band move.
+5. Run to day 4, then pause. Show the titer band and the recommendation, if the gate is open (a batch on the current recipe v3 is near the optimum, so the gate may rightly stay closed; a batch started on legacy recipe v1 has real room to improve). In the DCS console, the operator applies it, citing the recommendation. Resume, and watch the band move. Then open *Optimizer against ground truth* on the Yield page: what the advice would truly have gained.
 6. Close with the SHAP drivers and the advice → action → outcome graph query: process understanding, not just a black box.

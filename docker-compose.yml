@@ -70,6 +70,18 @@ services:
       mosquitto: {condition: service_healthy}
       bootstrap: {condition: service_completed_successfully}
 
+  yield:
+    <<: *python
+    command: ["python", "-m", "ai.yield_.service"]
+    environment:
+      <<: *python-env
+      SERVICE: yield
+    volumes:
+      - models:/models:ro
+    depends_on:
+      mosquitto: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+
   simulator:
     <<: *python
     command: ["python", "-m", "simulator.run"]
@@ -131,6 +143,27 @@ services:
       timeout: 10s
       retries: 18
       start_period: 20s
+
+  dashboard:
+    <<: *python
+    command:
+      - streamlit
+      - run
+      - dashboard/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    environment:
+      <<: *python-env
+      SERVICE: dashboard
+      HOME: /tmp  # streamlit writes its config under $HOME; the service user has none
+    ports: ["8501:8501"]
+    volumes:
+      - models:/models:ro
+    depends_on:
+      mosquitto: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
 
 volumes:
   models:

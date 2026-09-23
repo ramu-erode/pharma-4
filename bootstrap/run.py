@@ -5,7 +5,8 @@
 3. backfill the historical batches, unless already complete
 4. replay into the graph any batch the historian has and the graph lacks, and project
    its attribution (so a Neo4j reset heals itself)
-5. train the AI models if their training data changed (increment 5 adds the yield model)
+5. train the AI models (anomaly, then yield) if their training data changed
+6. write the models' evaluation reports (the dashboard shows them) when missing or stale
 
     python -m bootstrap.run
 
@@ -17,8 +18,12 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 
 from ai import train_all
+from ai.anomaly import evaluate as anomaly_evaluate
+from ai.yield_ import evaluate as yield_evaluate
+from ai.yield_.train import train_yield
 from common.settings import get_settings
 from graph import db as graph_db
 from graph import load, replay
@@ -33,21 +38,30 @@ def main() -> None:
     settings = get_settings()
     t0 = time.perf_counter()
     with connect(settings.postgres_dsn, wait_s=120) as conn, graph_db.connect(settings) as driver:
-        log.info("step 1/5: TimescaleDB migrations")
+        log.info("step 1/6: TimescaleDB migrations")
         migrate(conn)
-        log.info("step 2/5: graph schema and configuration")
+        log.info("step 2/6: graph schema and configuration")
         graph_db.run_each(driver, load.schema_statements())
         graph_db.run_all(
             driver, load.config_statements(settings.site, settings.area, settings.line)
         )
-        log.info("step 3/5: backfill (%d batches)", settings.backfill_batches)
+        log.info("step 3/6: backfill (%d batches)", settings.backfill_batches)
         backfill.run(conn, settings)
         missing = replay.missing_batches(conn, driver)
-        log.info("step 4/5: graph replay (%d batches missing)", len(missing))
+        log.info("step 4/6: graph replay (%d batches missing)", len(missing))
         if missing:
             replay.replay(conn, driver, missing)
-        log.info("step 5/5: model training")
-        train_all.train_anomaly(conn, settings)
+        log.info("step 5/6: model training")
+        retrained = train_all.train_anomaly(conn, settings)
+        retrained = train_yield(conn, settings) or retrained
+        models = Path(settings.models_dir)
+        reports = (models / "anomaly_eval.json", models / "yield_eval.json")
+        if retrained or not all(r.exists() for r in reports):
+            log.info("step 6/6: evaluation reports")
+            anomaly_evaluate.evaluate(settings)
+            yield_evaluate.evaluate(settings, per_recipe=4, day=4.0)
+        else:
+            log.info("step 6/6: evaluation reports are current")
     log.info("bootstrap complete in %.0f s", time.perf_counter() - t0)
 
 

@@ -17,12 +17,12 @@ import json
 import logging
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import psycopg
 
+from common import pools
 from common.models import BatchStatus
 from common.settings import Settings, get_settings
 from common.uns import UnitPath
@@ -140,7 +140,7 @@ def run(
     log.info("backfilling %d batches with %d workers", len(ids), workers)
     t0 = time.perf_counter()
     results: list[BatchResult] = []
-    with ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(settings,)) as pool:
+    with pools.pool(_init_worker, (settings,), workers) as pool:
         for i, r in enumerate(pool.map(_run_one, plan.specs), start=1):
             results.append(r)
             if i % 20 == 0 or i == len(ids):
