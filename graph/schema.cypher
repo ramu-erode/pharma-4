@@ -1,0 +1,21 @@
+// Neo4j schema: one uniqueness constraint per natural key, so MERGE is idempotent
+// and replays are safe (architecture: graph sync). Applied by bootstrap.
+CREATE CONSTRAINT site_id IF NOT EXISTS FOR (n:Site) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT area_id IF NOT EXISTS FOR (n:Area) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT line_id IF NOT EXISTS FOR (n:Line) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT equipment_id IF NOT EXISTS FOR (n:Equipment) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT em_id IF NOT EXISTS FOR (n:EquipmentModule) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT cm_id IF NOT EXISTS FOR (n:ControlModule) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT sensor_id IF NOT EXISTS FOR (n:Sensor) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT tag_topic IF NOT EXISTS FOR (n:Tag) REQUIRE n.topic IS UNIQUE;
+CREATE CONSTRAINT phase_class_name IF NOT EXISTS FOR (n:PhaseClass) REQUIRE n.name IS UNIQUE;
+CREATE CONSTRAINT recipe_id IF NOT EXISTS FOR (n:Recipe) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT spec_limit_id IF NOT EXISTS FOR (n:SpecLimit) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT batch_id IF NOT EXISTS FOR (n:Batch) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT operation_id IF NOT EXISTS FOR (n:Operation) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT phase_instance_id IF NOT EXISTS FOR (n:PhaseInstance) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT hold_id IF NOT EXISTS FOR (n:Hold) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT event_id IF NOT EXISTS FOR (n:Event) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT recommendation_id IF NOT EXISTS FOR (n:Recommendation) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT fault_injection_id IF NOT EXISTS FOR (n:FaultInjection) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT outcome_batch IF NOT EXISTS FOR (n:Outcome) REQUIRE n.batch_id IS UNIQUE;

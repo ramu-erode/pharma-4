@@ -1,0 +1,44 @@
+# Plant configuration: the stand-in for a DeltaV FHX export (ADR-0006, ADR-0011).
+# graph-sync loads it straight into Neo4j at bootstrap. It is configuration, not data:
+# nothing publishes it over MQTT.
+#
+# Hierarchy: Site > Area > Line > Unit (Equipment) > Equipment module > Control module.
+# Control-module ids match the loop part of the raw DCS tag (AIC-102 in BR101.AIC-102.PV),
+# which is how control modules find their UNS tags.
+
+site: {id: chennai, name: Chennai}
+area: {id: upstream, name: Upstream processing}
+line: {id: suite-1, name: Suite 1}
+
+# Both bioreactors are built the same, so modules and bindings below apply to each.
+units:
+  BR-101: {type: Bioreactor, working_volume_l: 2000}
+  BR-102: {type: Bioreactor, working_volume_l: 2000}
+
+equipment_modules:
+  EM-THERMAL: {name: Jacket temperature, control_modules: [TIC-101, TI-199]}
+  EM-PH: {name: pH control, control_modules: [AIC-102, FIC-108, FQI-109]}
+  EM-AERATION: {name: Aeration and agitation, control_modules: [AIC-103, SIC-104, FIC-106, FIC-107, PIC-110]}
+  EM-FEED: {name: Feed addition, control_modules: [FQI-105, WIT-111]}
+
+sensors:
+  - {id: TEMP-RTD, model: Endress+Hauser TR10, control_module: TIC-101, calibration_interval_days: 180}
+  - {id: PH-PROBE, model: Mettler Toledo InPro 3253i, control_module: AIC-102, calibration_interval_days: 30}
+  - {id: DO-PROBE, model: Hamilton VisiFerm DO Arc, control_module: AIC-103, calibration_interval_days: 90}
+  - {id: PRESSURE-TX, model: Rosemount 3051, control_module: PIC-110, calibration_interval_days: 365}
+  - {id: LOAD-CELL, model: Mettler Toledo SWB805, control_module: WIT-111, calibration_interval_days: 365}
+
+# Phase classes are written against aliases; each unit resolves an alias to one of its
+# own modules (an equipment module or a control module). `role` says whether the phase
+# drives the loop (control) or only reads it (monitor).
+phase_classes:
+  TEMP_CTRL:
+    - {alias: "#THERMAL#", module: EM-THERMAL, role: control}
+  PH_CTRL:
+    - {alias: "#PH_LOOP#", module: EM-PH, role: control}
+    - {alias: "#TEMP_COMP#", module: TIC-101, role: monitor}  # pH is temperature-compensated
+  DO_CTRL:
+    - {alias: "#AERATION#", module: EM-AERATION, role: control}
+  FEED_ADD:
+    - {alias: "#FEED_PUMP#", module: EM-FEED, role: control}
+    - {alias: "#PH_CHECK#", module: AIC-102, role: monitor}  # a bolus checks pH first

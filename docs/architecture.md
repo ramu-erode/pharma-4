@@ -253,7 +253,8 @@ Neo4j holds context and relationships, never the raw time series (ADR-0004).
 ```mermaid
 flowchart LR
   Site -->|HAS_AREA| Area
-  Area -->|HAS_UNIT| Equip[Equipment<br/>BR-101]
+  Area -->|HAS_LINE| Line
+  Line -->|HAS_UNIT| Equip[Equipment<br/>BR-101]
   Equip -->|HAS_EM| EM[EquipmentModule]
   EM -->|HAS_CM| CM[ControlModule]
   CM -->|HAS_TAG| Tag
@@ -281,7 +282,7 @@ flowchart LR
 | PhaseClass, `BOUND_TO` | name; alias, role (`control` / `monitor`) | `config/plant.yaml` (FHX stand-in) |
 | Tag | UNS topic, raw tag, unit, kind | `_meta/tags/*` |
 | Recipe, SpecLimit | version; PAR / action / alarm low–high per tag or lever | `graph/recipes/*.yaml` |
-| Batch | id, start, end, status, campaign, actual levers (shift day, production temp, pH SP, DO SP, feed multiplier) | `events/batch` |
+| Batch | id, start, end, status, campaign, planned and actual levers (shift day, production temp, pH SP, DO SP, feed multiplier) | `events/batch` (planned), `events/operator` (changes) |
 | Operation | name, start, end | `state/operation` |
 | PhaseInstance | start, end, state intervals (RUNNING / HELD) | `state/phase/*` |
 | Event | id, type, severity, ts, layer, score, state | `events/*`, `ai/anomaly/alert/*` |
@@ -289,7 +290,11 @@ flowchart LR
 | FaultInjection | fault, onset, end — **never an `:Event`** | `_sim/faults/*` |
 | Outcome | final titer, disposition, harvest day, peak VCD, viability | `lab/*` at harvest, `events/batch` |
 
-**Sync.** graph-sync subscribes to `_meta/tags`, `state`, `events`, `lab`, `ai/anomaly/alert`, `ai/yield/recommendation` and `_sim/faults`, but not `pv`. It `MERGE`s by natural key, so replays are idempotent. That comes to about 60 nodes per batch.
+**Sync.** graph-sync subscribes to `_meta/tags`, `events`, `lab`, `ai/anomaly/alert`, `ai/yield/recommendation` and `_sim/faults`, but never `pv` or `sp`. Batch structure comes from `events/batch`, which carries every operation and phase transition, so `state/*` is not needed. It `MERGE`s by natural key, so replays are idempotent. That comes to about 30 nodes per batch before alerts.
+
+**Replay** (`graph/replay.py`). The historian keeps every message graph-sync consumes (`uns_events` in arrival order, lab values in `tag_values`, labels in `fault_labels`), so the graph can be rebuilt from TimescaleDB through the same core. Bootstrap uses this after backfill and replays any batch the graph lacks, so a Neo4j reset heals itself. `python -m graph.replay --all` rebuilds everything.
+
+**Actual levers** (`common/levers.py`) are the planned levers from `BATCH_START` updated by each `events/operator` change, not reconstructed from setpoint history. graph-sync and yield training use the same function.
 
 **Attribution projection** (ADR-0011). `graph/project.py` resolves ADR-0006's algorithm and upserts `tag_attribution(topic, batch_id, operation, phase, role, phase_state, t_start, t_end)` into TimescaleDB. It runs whenever an operation or phase interval closes or changes, and in bulk from backfill. A null `phase` means the fallback to the operation.
 

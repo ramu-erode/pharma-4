@@ -33,6 +33,7 @@ services:
       SERVICE: bootstrap
     depends_on:
       timescaledb: {condition: service_healthy}
+      neo4j: {condition: service_healthy}
 
   historian:
     <<: *python
@@ -40,6 +41,16 @@ services:
     environment:
       <<: *python-env
       SERVICE: historian
+    depends_on:
+      mosquitto: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+
+  graph-sync:
+    <<: *python
+    command: ["python", "-m", "graph.sync"]
+    environment:
+      <<: *python-env
+      SERVICE: graph-sync
     depends_on:
       mosquitto: {condition: service_healthy}
       bootstrap: {condition: service_completed_successfully}

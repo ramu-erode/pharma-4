@@ -106,9 +106,11 @@ These follow from the ADRs, and the plan leans on them throughout.
 | 3.2 | `graph/schema.cypher`: uniqueness constraints per natural key; indexes on `Batch.id`, `Tag.topic`, `Event.id`. | `graph/schema.cypher` |
 | 3.3 | Loaders: `plant.yaml` and recipes → `MERGE` statements, run by bootstrap. | `graph/load.py` |
 | 3.4 | Sync core: `handle(topic, payload) -> list[Stmt]` for `_meta/tags`, `state/operation`, `state/phase/*`, `events/batch`, `events/operator`, `lab/*` at harvest (Outcome), `ai/anomaly/alert/*`, `ai/yield/recommendation` and `_sim/faults`. Everything is idempotent `MERGE`, batched with `UNWIND` for backfill. | `graph/core.py` |
-| 3.5 | `common/levers.py`: `extract_levers(sp_series, feed_total, recipe) -> Levers`, the actual whole-batch levers from SP history. graph-sync stores them on `Batch` at harvest; increment 5 training calls the same function on TimescaleDB data. | `common/levers.py` |
+| 3.5 | `common/levers.py`: `actual_levers(planned, operator_events) -> Levers`. **As built:** derived from `BATCH_START` plus `events/operator` rather than SP history: exact, and both graph-sync and increment 5 training have those messages. | `common/levers.py` |
 | 3.6 | `graph/project.py`: a Cypher implementation of ADR-0006 (running phase instances ∩ bound phase classes → role, with the operation as fallback) → upsert `tag_attribution` rows for an interval. Called when an interval closes, and in bulk by backfill. | `graph/project.py` |
 | 3.7 | Sync shell, plus backfill and bootstrap wiring (load config → backfill writes graph → bulk projection). | `graph/sync.py`, `simulator/backfill.py`, `bootstrap/run.py` |
+
+**As built:** backfill does not feed graph-sync directly. Bootstrap replays the graph from the historian (`graph/replay.py`, migration 008 adds `uns_events.seq` for arrival order); 200 batches replay and project in about 20 s. Clean `docker compose up` to demo-ready including the graph: 108 s.
 
 **Tests:** projection against a hand-built graph covering overlapping phases, a HOLD interval, a tag with no bound phase (fallback), and a tag with both `control` and `monitor` roles; replay idempotency (the same messages twice give the same node counts); `extract_levers` recovers the levers the engine was given, within tolerance; node count per batch about 60.
 

@@ -6,8 +6,8 @@ The one sanctioned bypass of the broker. Each batch runs the same code as the li
 in-process: engine -> edge core (map, enrich, deadband) -> historian core (COPY).
 Batches are independent, so they run in parallel, one database connection per worker.
 
-The graph side (graph-sync handlers) is added in increment 3; `BatchResult.context`
-already carries the low-rate messages it will need.
+The graph is then rebuilt from what was written (graph.replay), exactly as it would be
+after a Neo4j reset.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import psycopg
-from pydantic import BaseModel
 
 from common.models import BatchStatus
 from common.settings import Settings, get_settings
@@ -44,7 +43,6 @@ class BatchResult:
     status: BatchStatus
     true_titer: float
     tag_rows: int
-    context: tuple[tuple[str, BaseModel], ...]  # low-rate UNS messages, for graph-sync
     seconds: float
 
 
@@ -74,7 +72,6 @@ def simulate(
     deadband = Deadband(settings.deadband_floor_s, settings.publish_period_s)
     batch_of_cell: dict[str, str | None] = {spec.cell: None}
     rows = hist.Batch()
-    context: list[tuple[str, BaseModel]] = []
     for msg in run.run_to_end():
         if isinstance(msg, RawOut):
             m = map_and_enrich(msg.tag, msg.value, msg.t, msg.q, tag_map, batch_of_cell)
@@ -90,13 +87,11 @@ def simulate(
         row = hist.route(topic, payload)
         if row is not None:
             rows.add(row)
-        context.append((topic, payload))
     result = BatchResult(
         batch_id=spec.batch_id,
         status=run.status,
         true_titer=run.state.titer,
         tag_rows=len(rows.tags),
-        context=tuple(context),
         seconds=time.perf_counter() - t0,
     )
     return rows, result
