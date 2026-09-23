@@ -1,0 +1,25 @@
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local config and secrets (defaults live in .env.example)
+.env
+mosquitto/passwd
+
+# Generated data and models
+models/
+*.joblib

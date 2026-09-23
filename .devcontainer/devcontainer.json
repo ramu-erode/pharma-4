@@ -1,0 +1,73 @@
+{
+  "name": "pharma-4",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts",
+      "installYarnUsingApt": false
+    },
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": true,
+      "dockerDashComposeVersion": "v2"
+    },
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-docker",
+        "redhat.vscode-yaml",
+        "neo4j-extensions.neo4j-for-vscode",
+        "bierner.markdown-mermaid"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"],
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports.ruff": "explicit"
+        },
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        },
+        "files.exclude": {
+          "**/__pycache__": true,
+          "**/.pytest_cache": true,
+          "**/.ruff_cache": true
+        }
+      }
+    }
+  },
+
+  "forwardPorts": [1883, 5432, 7474, 7687, 8501],
+  "portsAttributes": {
+    "1883": { "label": "Mosquitto (MQTT / UNS)" },
+    "5432": { "label": "TimescaleDB" },
+    "7474": { "label": "Neo4j Browser" },
+    "7687": { "label": "Neo4j Bolt" },
+    "8501": { "label": "Streamlit dashboard" }
+  },
+
+  "mounts": [
+    "source=pharma4-claude-config,target=/home/vscode/.claude,type=volume"
+  ],
+
+  "containerEnv": {
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "TZ": "Asia/Kolkata"
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  "remoteUser": "vscode"
+}
