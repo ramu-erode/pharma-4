@@ -51,6 +51,11 @@ topic read _sim/faults/#
 topic write _sim/cmd/#
 topic write pharmaco/_meta/dashboard/#
 
+# The i3X read API (ADR-0016). Anything it serves an LLM may see, so no `_sim/#`.
+user i3x
+topic read pharmaco/#
+topic write pharmaco/_meta/i3x/#
+
 # Compose healthcheck only.
 user healthcheck
 topic read $SYS/#

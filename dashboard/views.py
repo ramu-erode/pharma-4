@@ -4,6 +4,8 @@ import: `dashboard/app.py` wires these into navigation, and tests render them on
 Live, Alerts, Yield, Graph and UNS browser pages, plus a Demo sidebar that drives the
 simulator through `_sim/cmd` and a DCS console for operator setpoint changes. There is
 no Apply button on a recommendation: a person enters the change (ADR-0012, ADR-0015).
+The Ask page is the exception to "reads the stores directly": its assistant reads only
+through the i3X API (ADR-0017).
 """
 
 from __future__ import annotations
@@ -11,10 +13,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import anthropic
 import pandas as pd
 import psycopg
 import streamlit as st
 
+from assistant import agent
 from common import models as m
 from common import uns
 from common.settings import Settings, get_settings
@@ -504,3 +508,67 @@ def page_uns() -> None:
         )
 
     body()
+
+
+# --- Ask (ADR-0017) ------------------------------------------------------------------------------
+
+EXAMPLE_QUESTIONS = (
+    "Why is the predicted titer of the running batch on BR-101 falling?",
+    "Which phases control the pH loop on BR-101, and which only monitor it?",
+    "How do final titers compare between recipe v1 and v3 manufacturing batches?",
+)
+
+
+@st.cache_resource
+def assistant() -> agent.Assistant:
+    return agent.from_settings(settings())  # raises (and is not cached) when unavailable
+
+
+def page_ask() -> None:
+    st.title("Ask")
+    st.caption(
+        "Claude answers from what it reads through the plant's i3X API: the same view any "
+        "i3X client gets, with no ground truth and no direct store access (ADR-0017). "
+        "Advisory only: it cannot change the process or decide a disposition."
+    )
+    try:
+        bot = assistant()
+    except agent.AssistantUnavailable as exc:
+        st.info(str(exc))
+        return
+    ss = st.session_state
+    ss.setdefault("ask_history", [])
+    ss.setdefault("ask_log", [])
+    if st.button("New conversation", disabled=not ss.ask_log):
+        ss.ask_history, ss.ask_log = [], []
+
+    for role, text, calls in ss.ask_log:
+        with st.chat_message(role):
+            _render_turn(text, calls)
+
+    question = st.chat_input("Ask about a batch, an alert, a trend or the plant model")
+    if not ss.ask_log:
+        for q in EXAMPLE_QUESTIONS:
+            if st.button(q):
+                question = q
+    if not question:
+        return
+    with st.chat_message("user"):
+        st.markdown(question)
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner("Reading the plant through i3X…"):
+                answer = bot.ask(question, ss.ask_history)
+        except anthropic.APIError as exc:
+            st.error(f"Claude API error: {exc}")
+            return
+        _render_turn(answer.text, answer.tool_calls)
+    ss.ask_history = answer.messages
+    ss.ask_log += [("user", question, []), ("assistant", answer.text, answer.tool_calls)]
+
+
+def _render_turn(text: str, calls: list[agent.ToolCall]) -> None:
+    if calls:
+        with st.expander(f"{len(calls)} i3X call(s)"):
+            st.code(agent.trail(calls), language=None)
+    st.markdown(text)

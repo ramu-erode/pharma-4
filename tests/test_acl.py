@@ -43,7 +43,16 @@ def can(user: str, action: str, topic: str) -> bool:
     )
 
 
-SERVICES = ["simulator", "edge-adapter", "historian", "graph-sync", "anomaly", "yield", "dashboard"]
+SERVICES = [
+    "simulator",
+    "edge-adapter",
+    "historian",
+    "graph-sync",
+    "anomaly",
+    "yield",
+    "dashboard",
+    "i3x",
+]
 
 OWNED = {
     "simulator": [
@@ -68,6 +77,7 @@ OWNED = {
     "dashboard": [uns.sim_cmd(c) for c in SimCommand],
     "historian": [],
     "graph-sync": [],
+    "i3x": [],
 }
 for _svc in SERVICES:
     OWNED[_svc].append(uns.meta_status(_svc))
@@ -81,7 +91,7 @@ def test_exactly_one_writer_per_branch(owner, topic):
     assert writers == {owner}
 
 
-@pytest.mark.parametrize("user", ["anomaly", "yield"])
+@pytest.mark.parametrize("user", ["anomaly", "yield", "i3x"])  # i3x feeds the LLM (ADR-0017)
 @pytest.mark.parametrize(
     "topic", [uns.sim_faults("BR-101"), uns.sim_clock(), *[uns.sim_cmd(c) for c in SimCommand]]
 )
@@ -105,6 +115,8 @@ def test_ai_services_cannot_see_sim(user, topic):
         ("yield", uns.lab(UNIT, "titer")),
         ("dashboard", uns.edge_unmapped()),
         ("dashboard", uns.sim_clock()),
+        ("i3x", uns.pv(UNIT, "ph")),
+        ("i3x", uns.ai_prediction(UNIT)),
     ],
 )
 def test_required_reads(user, topic):

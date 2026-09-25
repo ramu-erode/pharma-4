@@ -10,7 +10,7 @@ requires-python = ">=3.12,<3.13"
 # Dependencies live in requirements.txt (pinned); this file holds metadata and tool config.
 
 [tool.setuptools.packages.find]
-include = ["common*", "simulator*", "edge*", "historian*", "graph*", "ai*", "bootstrap*", "dashboard*"]
+include = ["common*", "simulator*", "edge*", "historian*", "graph*", "ai*", "bootstrap*", "dashboard*", "i3x*", "assistant*"]
 
 [tool.ruff]
 line-length = 100

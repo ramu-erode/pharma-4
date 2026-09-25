@@ -82,6 +82,24 @@ services:
       mosquitto: {condition: service_healthy}
       bootstrap: {condition: service_completed_successfully}
 
+  # i3X 1.0 read API over the broker, historian and graph (ADR-0016).
+  # http://localhost:8600/v1/info; every other endpoint needs I3X_API_KEY.
+  i3x:
+    <<: *python
+    command: ["python", "-m", "i3x.service"]
+    environment:
+      <<: *python-env
+      SERVICE: i3x
+    ports: ["8600:8600"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8600/v1/info', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      mosquitto: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+
   simulator:
     <<: *python
     command: ["python", "-m", "simulator.run"]
@@ -158,6 +176,7 @@ services:
       <<: *python-env
       SERVICE: dashboard
       HOME: /tmp  # streamlit writes its config under $HOME; the service user has none
+      I3X_URL: http://i3x:8600/v1  # the Ask page reads the plant only through i3X (ADR-0017)
     ports: ["8501:8501"]
     volumes:
       - models:/models:ro

@@ -1,8 +1,8 @@
 # Implementation plan
 
-How to build what [architecture.md](architecture.md) and ADR-0001 to ADR-0015 describe. The plan has one foundation step and then five increments. Each increment ends demoable, and each numbered task is roughly one reviewable change.
+How to build what [architecture.md](architecture.md) and ADR-0001 to ADR-0017 describe. The plan has one foundation step and then six increments. Each increment ends demoable, and each numbered task is roughly one reviewable change.
 
-Last updated 2026-09-23.
+Last updated 2026-09-24.
 
 ## Before starting
 
@@ -163,6 +163,32 @@ These follow from the ADRs, and the plan leans on them throughout.
 
 **Done when:** a presenter can run the demo script from the architecture doc end to end from the dashboard alone, and the notebook reports RMSE by day plus the optimizer-versus-truth gap.
 
+## Increment 6 — i3X read API and LLM assistant (size: M)
+
+**Goal:** one standard way to read the plant, and an LLM that uses nothing else (ADR-0016, ADR-0017).
+
+| # | Task | Files |
+| --- | --- | --- |
+| 6.1 | Address space, pure: types (JSON Schema), relationship pairs, objects built from a plain `Catalog`. ISA-95 hierarchy, S88 composition, batch context under `batches`, `recipes`, `phase-classes`. A data point's elementId is its UNS topic. | `i3x/space.py` |
+| 6.2 | Values: payload → VQT with the i3X null and quality rules; a last-value cache fed by the broker; composition by `maxDepth`; history from `tag_values` / `uns_events` with a per-element cap and 206. | `i3x/values.py`, `i3x/store.py` |
+| 6.3 | Sync subscriptions: client scoping, sequence acknowledgement, `-1`, oldest-first overflow with 206, TTL. | `i3x/subscriptions.py` |
+| 6.4 | FastAPI app: envelopes, bulk order, 400 for malformed requests, gzip, API key; writes and stream answer 501. Service shell: Neo4j catalog cached for 5 s, MQTT user `i3x` (`pharmaco/#` only), compose service on 8600. | `i3x/api.py`, `i3x/catalog.py`, `i3x/service.py`, `mosquitto/acl` |
+| 6.5 | Assistant: i3X client, six tools that mirror i3X calls (client-side history downsampling, capped results), a bounded tool loop on `claude-opus-5` with adaptive thinking and refusal fallbacks, CLI. | `assistant/*` |
+| 6.6 | Dashboard **Ask** page: chat with the tool trail per answer; disabled without `ANTHROPIC_API_KEY`. | `dashboard/views.py` |
+
+**Tests:**
+
+- The address space: types valid, ids unique, every edge has its reverse, and `parentId` matches an edge.
+- Values and the spec's null rules, subscriptions, and the API behaviours the conformance suite checks.
+- The fence: no ground-truth names in `i3x/` or `assistant/`, and no store or broker imports in `assistant/`.
+- The tools, against the app in-process.
+- The tool loop, against a scripted stand-in for Claude.
+- Compose smoke tests for i3X.
+
+**Done when:** CESMII's conformance suite passes every MUST against the running stack, and a question on the Ask page is answered from i3X calls alone.
+
+**As built:** 487 objects over 202 batches. CESMII's suite rates the façade **1.0 Compatible** (51 passed, 0 failed; plain HTTP is the one advisory). CESMII's MCP server browses, reads and pulls history from the façade unchanged. The assistant's live answers were **not** exercised in the build session, because no API key was available there. Only its mechanics are tested.
+
 ## Critical path and parallelism
 
 ```
@@ -196,3 +222,5 @@ Record measured budgets (engine time per batch, backfill time, DB size, harness 
 | TimescaleDB size after compression | ≤ 3 GB | 141 MB database, 115 MB `tag_values` for 7.24M rows (2026-09-23) |
 | Fault harness | < 60 s | 42 s on 12 cores (48 simulated batches) (2026-09-23) |
 | False alerts per clean batch | < 1 | 0.75 out of sample (harness); history: 30/30 labelled faults detected (2026-09-23) |
+| i3X conformance (CESMII suite, 1.0) | all MUST pass | 1.0 Compatible: 51 passed, 0 failed, 1 advisory (HTTP) (2026-09-24) |
+| i3X catalog rebuild from Neo4j | < 5 s (the cache TTL) | 0.95 s for 487 objects; 14-day history of 3 points in 0.48 s (2026-09-24) |

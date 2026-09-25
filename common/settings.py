@@ -55,6 +55,15 @@ class Settings(BaseSettings):
 
     models_dir: str = "models"  # trained models and their manifests (a volume in compose)
 
+    # i3X read API (ADR-0016). An empty key turns authentication off (tests only).
+    i3x_url: str = "http://localhost:8600/v1"
+    i3x_port: int = 8600
+    i3x_api_key: str | None = None
+
+    # LLM assistant (ADR-0017). The key lives in .env only, never in .env.example.
+    anthropic_api_key: str | None = None
+    assistant_model: str = "claude-opus-5"
+
     def mqtt_credentials(self, service: str | None = None) -> tuple[str, str | None]:
         """Username and password for `service` (default: SERVICE from the environment).
 

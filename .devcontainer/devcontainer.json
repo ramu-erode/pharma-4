@@ -48,8 +48,9 @@
     }
   },
 
-  "forwardPorts": [1883, 5432, 7474, 7687, 8501],
+  "forwardPorts": [1883, 5432, 7474, 7687, 8501, 8600],
   "portsAttributes": {
+    "8600": { "label": "i3X read API" },
     "1883": { "label": "Mosquitto (MQTT / UNS)" },
     "5432": { "label": "TimescaleDB" },
     "7474": { "label": "Neo4j Browser" },

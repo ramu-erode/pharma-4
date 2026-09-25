@@ -3,7 +3,7 @@
 # Users must match the `user` entries in mosquitto/acl (tests/test_acl.py checks this).
 set -eu
 
-USERS="simulator edge-adapter historian graph-sync anomaly yield dashboard healthcheck explorer"
+USERS="simulator edge-adapter historian graph-sync anomaly yield dashboard i3x healthcheck explorer"
 RUN_DIR=/mosquitto/run
 PASSWD="$RUN_DIR/passwd"
 

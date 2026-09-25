@@ -25,6 +25,9 @@ quality, applies a deadband, and republishes. Everything else subscribes to the
 broker: the **historian** writes to TimescaleDB, **graph-sync** maintains Neo4j,
 and the **anomaly** and **yield** services score the stream and publish their
 results back into the UNS under `ai/*`. A Streamlit **dashboard** reads all three.
+The **i3x** service is the one standard read API: i3X 1.0 over the broker, historian
+and graph, read-only (ADR-0016). The LLM **assistant** reads the plant only through it
+(ADR-0017).
 
 Full design: `docs/architecture.md` and the ADRs in `docs/adr/`.
 
@@ -39,6 +42,8 @@ historian/   TimescaleDB writer and SQL migrations
 graph/       Neo4j sync, attribution projection, schema.cypher, recipes
 ai/          features.py, anomaly/ and yield_/ services, plus training entry points
 bootstrap/   One-shot, idempotent first-start: migrations, backfill, training
+i3x/         i3X 1.0 read API: address space, values, subscriptions, FastAPI app
+assistant/   LLM Q&A through i3X only: i3X client, tools, tool loop, CLI
 dashboard/   Streamlit app
 docs/adr/    Architecture Decision Records
 tests/       pytest suites mirroring the package layout
@@ -65,8 +70,10 @@ tests/       pytest suites mirroring the package layout
 - Every payload carries `v`, `ts` (UTC ISO-8601), `unit`, `q`, `batch`, `src`. `ts`
   is simulated plant time, so never compare it with `now()`; use heartbeats for
   liveness (ADR-0009). `v` is typed per topic class (ADR-0013).
-- `_sim/#` exists only because the plant is simulated. The AI services must never read
-  it: it carries ground-truth fault labels (ADR-0012).
+- `_sim/#` exists only because the plant is simulated. The AI services and the i3x
+  service must never read it: it carries ground-truth fault labels (ADR-0012). Whatever
+  i3X serves, an LLM may see, so i3x queries never touch `FaultInjection` or
+  `fault_labels` either (`tests/i3x/test_fence.py`).
 
 **Data placement**
 
@@ -110,6 +117,8 @@ python -m graph.replay [--all]    # rebuild the graph from the historian
 python -m simulator.ctl --help    # demo control: start batch, inject fault, speed, run to day N
 pytest                            # run the test suite (fault harness is marked slow)
 pytest -m compose                 # smoke-test against the running stack
+python -m assistant "question"    # ask the plant via i3X (needs ANTHROPIC_API_KEY in .env)
+curl localhost:8600/v1/info       # i3X read API; other endpoints need X-API-Key: $I3X_API_KEY
 ruff check . && ruff format .     # lint and format
 ```
 

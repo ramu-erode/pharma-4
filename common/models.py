@@ -79,6 +79,7 @@ class Src(StrEnum):
     HISTORIAN = "historian"
     GRAPH_SYNC = "graph-sync"
     DASHBOARD = "dashboard"
+    I3X = "i3x"
 
 
 class _Model(BaseModel):

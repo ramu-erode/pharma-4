@@ -46,4 +46,6 @@ Date: YYYY-MM-DD
 | [0012](0012-sim-branch-control-and-ground-truth.md) | A `_sim` branch for control and ground truth, fenced by ACL | Accepted |
 | [0013](0013-payload-typing-and-alert-lifecycle.md) | Typed `v` for structured payloads, and a keyed alert lifecycle | Accepted |
 | [0014](0014-advisory-ai-paired-gain-gate.md) | AI output is advisory; recommendations are gated on paired gain | Superseded by 0015 |
-| [0015](0015-lever-effects-from-the-doe.md) | Lever effects come from the designed experiment, not the in-batch model | Accepted |
+| [0015](0015-lever-effects-from-the-doe.md) | Lever effects come from the designed experiment, not the in-batch model | Accepted (refined by 0017) |
+| [0016](0016-i3x-read-api.md) | A read-only i3X 1.0 façade is the standard read API | Accepted |
+| [0017](0017-llm-assistant-reads-through-i3x.md) | The LLM assistant reads the plant only through i3X | Accepted |

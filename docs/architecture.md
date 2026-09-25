@@ -14,12 +14,14 @@ The POC proves that one simulated fed-batch bioreactor can publish into a Unifie
 2. Can a knowledge graph turn that stream into context: which batch, which equipment, which recipe, which phase controlled which loop, which spec limits?
 3. Can a model flag a developing fault (for example a drifting pH probe or a fouling sparger) before the true process leaves spec?
 4. Can a model predict final titer mid-batch and recommend setpoint changes that raise it, and only when the gain is real?
+5. Can any consumer, an LLM included, read the plant through an open standard (i3X) without learning our schemas and without seeing ground truth?
 
 **In scope**
 
 - One site, one area, two bioreactors (BR-101, BR-102), so the graph and UNS show more than one asset
 - A Python simulator with a hidden true state, a sensor model, closed-loop control, injected faults and a titer outcome per batch
 - Mosquitto broker, edge adapter, TimescaleDB history, Neo4j graph, anomaly and yield services, Streamlit dashboard
+- A read-only i3X 1.0 API over those stores, and an LLM assistant that reads only through it
 - 200 historical batches, generated automatically on first start
 
 **Out of scope**
@@ -31,7 +33,7 @@ The POC proves that one simulated fed-batch bioreactor can publish into a Unifie
 
 ## Architecture overview
 
-Everything goes through the MQTT broker. Producers publish once to the UNS, and every consumer subscribes independently. No service calls another service to fetch process data. The one sanctioned exception is the historical bulk loader (ADR-0010).
+Everything goes through the MQTT broker. Producers publish once to the UNS, and every consumer subscribes independently. No service calls another service to fetch process data. There are two sanctioned exceptions. The historical bulk loader bypasses the broker (ADR-0010). The **i3X read API** exists to be called: it is the one standard way for a consumer outside the pipeline to read the plant (ADR-0016), and the dashboard's LLM assistant reads only through it (ADR-0017).
 
 ```mermaid
 flowchart LR
@@ -57,6 +59,12 @@ flowchart LR
   UI -->|_sim/cmd| MQ
   NEO --> UI
   TS --> UI
+  MQ -->|pharmaco/#| I3X[i3X read API<br/>:8600/v1]
+  NEO -. address space .-> I3X
+  TS -. history .-> I3X
+  I3X -->|i3X only| ASK[Assistant<br/>Ask page, CLI]
+  ASK --> CLAUDE([Claude API])
+  I3X -.-> EXT[External i3X clients<br/>CESMII MCP server]
   BOOT[bootstrap<br/>one-shot] -. migrations, backfill, training .-> TS
   BOOT -.-> NEO
 ```
@@ -70,7 +78,9 @@ flowchart LR
 | Graph sync | Python + Neo4j driver | Maintains context; projects `tag_attribution` into TimescaleDB |
 | Anomaly service | Python, scikit-learn, PyOD | Scores windows, manages the alert lifecycle |
 | Yield service | Python, LightGBM, Optuna, SHAP | Mid-batch titer band, gated recommendations |
-| Dashboard | Streamlit | Live views, alerts, yield, graph queries, UNS browser, Demo sidebar |
+| Dashboard | Streamlit | Live views, alerts, yield, graph queries, UNS browser, Ask, Demo sidebar |
+| i3X read API | Python, FastAPI | i3X 1.0 over the three stores: types, objects, relationships, current values, history, sync subscriptions; read-only (ADR-0016) |
+| Assistant | Python, Anthropic SDK | Claude answers plant questions through i3X only; a library behind the Ask page and `python -m assistant` (ADR-0017) |
 | Bootstrap | Python (one-shot) | Migrations, schema, config load, backfill, training — idempotent |
 
 ## Time model
@@ -172,7 +182,7 @@ _sim/                                       # outside the UNS; does not exist in
   faults/<unit>                             # ground-truth labels
 ```
 
-**Payload** (ADR-0002, ADR-0013). Every payload carries all six keys. `v` is typed per topic class in `common/models.py`: a float for `pv`, `sp`, `lab` and `ai/anomaly/score`; a string enum for `state/*`; a nested model for events, alerts and recommendations. `unit` is null where it does not apply. `src` is one of `sim`, `edge`, `anomaly`, `yield`, `operator`. `historian`, `graph-sync` and `dashboard` also exist, but only as the source of those services' own heartbeats. Commands on `_sim/cmd/*` carry `src = operator`, because a person issues them.
+**Payload** (ADR-0002, ADR-0013). Every payload carries all six keys. `v` is typed per topic class in `common/models.py`: a float for `pv`, `sp`, `lab` and `ai/anomaly/score`; a string enum for `state/*`; a nested model for events, alerts and recommendations. `unit` is null where it does not apply. `src` is one of `sim`, `edge`, `anomaly`, `yield`, `operator`. `historian`, `graph-sync`, `dashboard` and `i3x` also exist, but only as the source of those services' own heartbeats. Commands on `_sim/cmd/*` carry `src = operator`, because a person issues them.
 
 ```json
 { "v": 7.03, "ts": "2026-09-22T10:15:05.000Z", "unit": "pH",
@@ -213,6 +223,7 @@ This table lives in code as `common.uns.delivery()`.
 | anomaly | `…/ai/anomaly/#`, `_meta/anomaly/#` | `pharmaco/#` — **no `_sim/#`** |
 | yield | `…/ai/yield/#`, `_meta/yield/#` | `pharmaco/#` — **no `_sim/#`** |
 | dashboard | `_sim/cmd/#`, `_meta/dashboard/#` | `pharmaco/#`, `edge/#`, `_sim/clock`, `_sim/faults/#` |
+| i3x | `_meta/i3x/#` | `pharmaco/#` — **no `_sim/#`**: whatever it serves, an LLM may see |
 | healthcheck | — | `$SYS/#` (compose healthcheck only) |
 | explorer | — | `#` (a person with MQTT Explorer; never a service) |
 
@@ -403,7 +414,8 @@ One `Dockerfile` and one Python image. Each Python compose service runs a differ
 | graph-sync | pharma-4 | — | mosquitto, neo4j, timescaledb |
 | anomaly | pharma-4 | — | mosquitto, bootstrap ✓ |
 | yield | pharma-4 | — | mosquitto, bootstrap ✓ |
-| dashboard | pharma-4 + Streamlit | 8501 | all |
+| i3x | pharma-4 + FastAPI | 8600 | mosquitto, bootstrap ✓ |
+| dashboard | pharma-4 + Streamlit | 8501 | all (the Ask page also needs i3x) |
 
 ✓ = `service_completed_successfully`.
 
@@ -427,6 +439,8 @@ pharma-4/
               yield_/ (train, predict, optimize, service)
               train_all.py
   bootstrap/  run.py
+  i3x/        space.py (address space), values.py, subscriptions.py, api.py, catalog.py, service.py
+  assistant/  i3x_client.py, tools.py, agent.py, __main__.py (CLI)
   dashboard/  app.py
   notebooks/  eda.ipynb, model_eval.ipynb
   tests/
@@ -450,14 +464,48 @@ pharma-4/
 3. **Yield**: predicted titer band over batch days, current recommendation, SHAP drivers, hold-out error by day, and the optimizer against ground truth
 4. **Graph**: preset Cypher queries, batch genealogy, phase bindings
 5. **UNS browser**: live topic tree, including `edge/raw` and `edge/unmapped`
+6. **Ask**: questions to the assistant, with the i3X calls behind each answer (ADR-0017); disabled until `ANTHROPIC_API_KEY` is set in `.env`
 
 **Demo sidebar** (every page): start batch (current or a named recipe), inject or clear a fault, speed and pause, run to day N, and the **DCS console** for manual setpoint changes. Pages live in `dashboard/views.py` (no import side effects, so each renders in a test); `dashboard/app.py` only wires navigation. Served on port 8501.
+
+## i3X read API & assistant
+
+**i3X** (ADR-0016). `http://localhost:8600/v1`. `GET /info` is open, and everything else needs `I3X_API_KEY`, sent as `X-API-Key` or `Authorization: Bearer`. It serves the required core of i3X 1.0 read-only; writes and SSE streaming answer 501.
+
+| i3X | Served from |
+| --- | --- |
+| Object types, objects, relationships | Neo4j, rebuilt into an address space every 5 s (`i3x/catalog.py` → `i3x/space.py`) |
+| Current value | Last-value cache fed by `pharmaco/#` |
+| History | `tag_values` (numbers) and `uns_events` (structured payloads), up to 20,000 points per element per request, 206 beyond |
+| Subscriptions | Sync queues fed by the same broker feed; a registration queues the current value first |
+
+The address space has four roots:
+
+- `pharmaco`: site > area > line > bioreactor through `HasChildren`. Inside each bioreactor, through `HasComponent`, are its equipment modules, control modules, tags, sensors, and its state, lab and AI data points. Reading a bioreactor with `maxDepth: 0` returns its whole live state.
+- `batches`: each batch's value holds its recipe, planned and actual levers, outcome and operation/phase timeline. Its children are its alerts, operator actions and recommendations.
+- `recipes`
+- `phase-classes`: linked to modules through `Controls` and `Monitors`.
+
+A data point's elementId is its UNS topic. Timestamps are plant time.
+
+**Assistant** (ADR-0017). `assistant/` holds a small i3X client, six tools that each mirror an i3X call, and a bounded tool loop on the Claude API (`claude-opus-5` by default, adaptive thinking, server-side refusal fallbacks). The six tools are:
+
+- `describe_model`
+- `find_objects`
+- `describe_objects`
+- `get_related`
+- `read_values`
+- `read_history`, downsampled on the client side
+
+The assistant runs behind the dashboard's **Ask** page and `python -m assistant "…"`. It cites the elementIds and plant-time windows it read, keeps observation apart from inference, and does not make disposition decisions. External LLM clients can reach the same view through CESMII's i3X MCP server, pointed at the façade (README).
 
 ## Testing
 
 - **Unit:** topic builder, payload models per topic class, tag-map coverage, deadband, clock monotonicity, projection against hand-built bindings, feature parity.
 - **Fault harness** (`@pytest.mark.slow`, target under 60 s, runs by default in CI): a session fixture simulates about 30 clean batches in-process with fixed seeds and fits the anomaly models. Then, for **every fault type**, a seeded batch must open an alert of the expected layer and class **before the simulator's true spec-breach time**. A clean batch must produce fewer than 1 alert.
-- **Compose smoke** (`-m compose`): brings up the stack, starts a batch through `_sim/cmd`, and asserts values reach TimescaleDB and Neo4j.
+- **Compose smoke** (`-m compose`): brings up the stack, starts a batch through `_sim/cmd`, and asserts values reach TimescaleDB and Neo4j, and that i3X serves the backfilled batches, a unit's live tree and a batch's history.
+- **i3X conformance:** CESMII's own suite (Node.js, a dev-time tool, not part of the stack) against the running façade. Measured: **1.0 Compatible**, 51 passed, 0 failed. The one advisory is plain HTTP. Writes and SSE streaming are omitted by design (ADR-0016).
+- **Assistant:** unit tests cover the tools (against the i3X app in-process) and the tool loop (against a scripted stand-in for the Claude API), and a test fails if `assistant/` imports a store or broker client. There is no answer-quality evaluation yet (ADR-0017).
 
 ## Pharma 4.0 / GMP considerations
 
@@ -471,13 +519,15 @@ The POC deliberately skips validation, but its design mirrors what a GMP version
 | Computerized system validation | None | GAMP 5 risk-based CSV; URS, IQ/OQ/PQ for GxP-impacting parts |
 | AI models | Retrained by bootstrap on a data hash | Model lifecycle control: versioned data and models, drift monitoring, change control per GAMP 5 AI guidance |
 | Recommendations | DCS-console stand-in, operator cited | Operator review and e-signature before any setpoint change; setpoints only within the PAR |
+| Read API (i3X) | One API key, plain HTTP, read-only | TLS, per-client identity and authorisation, an audit trail of reads |
+| LLM assistant | Advisory Q&A, no evaluation set, answers not recorded | Intended-use statement, a validated evaluation set, logged questions and answers, model version under change control |
 | Network | One Docker network | Purdue-model segmentation; the UNS lives in the DMZ or level 3, with no inbound writes to control |
 
 **Keep the AI out of GxP decisions at first.** Anomaly alerts and yield advice work as decision support. Batch release still follows the approved process.
 
 ## Build plan & demo
 
-Five increments, each ending with something demoable.
+Six increments, each ending with something demoable.
 
 | # | Increment | Demo at the end |
 | --- | --- | --- |
@@ -486,10 +536,10 @@ Five increments, each ending with something demoable.
 | 3 | `config/plant.yaml`, graph-sync, recipes, attribution projection, fault labels | Genealogy; "which phase controls pH vs only watches it"; attribution rows with roles |
 | 4 | Features, anomaly layers 1–3 with alignment and suppression, alert lifecycle, fault harness, evaluation notebook | Inject pH probe drift live: the PV stays perfect, the CO2 EWMA alert fires before the true pH breaches; DO fouling with PCA contributions |
 | 5 | Yield ensemble and quantiles, optimizer with frozen/open levers and paired gate, DCS console, SHAP, dashboard Demo sidebar | Mid-batch band narrows; recommendation with gain; operator applies it; graph links advice → action → outcome |
+| 6 | i3X 1.0 read API over the three stores (ADR-0016); LLM assistant reading only through it, Ask page and CLI (ADR-0017) | CESMII's conformance suite: 1.0 Compatible. Ask "why is this batch's predicted titer falling?" and watch the i3X calls behind the answer; the same plant through CESMII's MCP server |
 
 **Parked increments** (not planned; recorded so they are not lost)
 
-- 6 — LLM Q&A over the graph and history (read-only, advisory), for example "why was batch 142 low?"
 - 7 — PI Web API-shaped endpoint on the simulator, plus a second edge input, to show the ADR-0005 swap path
 - 8 — Downstream area (harvest / chromatography) with cross-area batch genealogy
 
@@ -503,3 +553,4 @@ TimescaleDB stays (ADR-0004). InfluxDB is only revisited if a client's stack req
 4. Run "alerts on low-titer batches by tag" to show that pH issues correlate with low yield.
 5. Run to day 4, then pause. Show the titer band and the recommendation, if the gate is open. A batch on the current recipe v3 is near the optimum, so the gate usually, and rightly, stays closed. Start the demo batch on legacy recipe v1 to show a recommendation with a real gain. In the DCS console, the operator applies it, citing the recommendation. Resume, and watch the band move. Then open *Optimizer against ground truth* on the Yield page: what the advice would truly have gained.
 6. Close with the SHAP drivers and the advice → action → outcome graph query: process understanding, not just a black box.
+7. (Optional, needs `ANTHROPIC_API_KEY`) On the **Ask** page, ask why the demo batch's predicted titer is falling. Open the i3X calls behind the answer: the model browsed a standard API, not our tables, and never saw the injected-fault labels.

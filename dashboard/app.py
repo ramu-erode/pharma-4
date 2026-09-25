@@ -16,5 +16,6 @@ st.navigation(
         st.Page(views.page_yield, title="Yield", url_path="yield"),
         st.Page(views.page_graph, title="Graph", url_path="graph"),
         st.Page(views.page_uns, title="UNS browser", url_path="uns"),
+        st.Page(views.page_ask, title="Ask", url_path="ask"),
     ]
 ).run()

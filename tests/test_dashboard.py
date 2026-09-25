@@ -6,7 +6,7 @@ from streamlit.testing.v1 import AppTest
 pytestmark = pytest.mark.compose
 
 
-@pytest.mark.parametrize("page", ["live", "alerts", "yield", "graph", "uns"])
+@pytest.mark.parametrize("page", ["live", "alerts", "yield", "graph", "uns", "ask"])
 def test_page_renders(page):
     app = AppTest.from_string(
         f"from dashboard import views\nviews.sidebar()\nviews.page_{page}()\n",
