@@ -12,11 +12,10 @@ from pathlib import Path
 
 import yaml
 
-from ai.features import PV
+from common.plant import get_plant
 
-PLANT_FILE = Path(__file__).resolve().parents[1] / "config" / "plant.yaml"
 TAG_MAP_FILE = Path(__file__).resolve().parents[1] / "edge" / "tag-map.yaml"
-SCORED_OPERATIONS = ("Growth", "Production")
+SCORED_OPERATIONS = ("Growth", "Production")  # the bioreactor's; see ai.profiles
 SHIFT_SETTLE_MIN = 120.0  # layers 2-3 stay quiet this long after TempShift ends
 
 
@@ -57,6 +56,23 @@ class Context:
                 return True
         return False
 
+    def operation_start(self, minute: float) -> float | None:
+        for _, start, end in reversed(self.operations):
+            if start <= minute and (end is None or minute < end):
+                return start
+        return None
+
+    def operation_age_h(self, minute: float) -> float:
+        """Hours since the operation running at `minute` began: the alignment axis for
+        units whose operations are recipe steps (ADR-0021)."""
+        start = self.operation_start(minute)
+        return (minute - start) / 60.0 if start is not None else 0.0
+
+    def new_operation(self, minute: float, within_min: float) -> bool:
+        """The operation at `minute` started less than `within_min` minutes before."""
+        start = self.operation_start(minute)
+        return start is None or minute - start < within_min
+
     def held_phases(self, minute: float) -> set[str]:
         return {
             p for p, start, end in self.holds if start <= minute and (end is None or minute < end)
@@ -80,15 +96,20 @@ class Context:
                 self.holds[i] = (p, start, minute)
 
 
-def controlled_by_config(plant_file: Path = PLANT_FILE) -> dict[str, set[str]]:
-    """Phase -> the PV signals it *controls*, from config (the same facts the graph holds).
-    Used offline; live, the service reads the bindings from the graph instead."""
-    plant = yaml.safe_load(plant_file.read_text())
-    tag_map = yaml.safe_load(TAG_MAP_FILE.read_text())["tags"]
+def controlled_by_config(cls: str = "bioreactor") -> dict[str, set[str]]:
+    """Phase -> the PV signals it *controls* on a unit of equipment class `cls`, from
+    config (the same facts the graph holds). Used offline; live, the service reads the
+    bindings from the graph instead."""
+    from ai.profiles import profile_for  # the profiles import this module
+
+    pv = profile_for(cls).pv
+    classes = get_plant().classes
+    tag_map = yaml.safe_load(TAG_MAP_FILE.read_text())["classes"][cls]
     loop_signals: dict[str, set[str]] = {}
     for suffix, spec in tag_map.items():
-        if spec["class"] == "pv" and spec["name"] in PV:
+        if spec["class"] == "pv" and spec["name"] in pv:
             loop_signals.setdefault(suffix.split(".")[0], set()).add(spec["name"])
+    plant = classes[cls]
     ems = plant["equipment_modules"]
     out: dict[str, set[str]] = {}
     for phase, bindings in plant["phase_classes"].items():

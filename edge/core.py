@@ -15,6 +15,7 @@ import yaml
 
 from common import uns
 from common.models import Quality, TagKind
+from common.plant import Plant, get_plant
 from common.uns import TopicClass, UnitPath
 
 TAG_MAP_FILE = Path(__file__).with_name("tag-map.yaml")
@@ -47,20 +48,24 @@ class TagMap:
     entries: dict[str, TagEntry]  # by full raw tag
 
     @classmethod
-    def load(cls, site: str, area: str, line: str, path: Path = TAG_MAP_FILE) -> TagMap:
+    def load(cls, plant: Plant | None = None, path: Path = TAG_MAP_FILE) -> TagMap:
+        """Every commissioned device's tags, at the unit's path in the plant model."""
+        plant = plant or get_plant()
         raw = yaml.safe_load(path.read_text())
         entries: dict[str, TagEntry] = {}
-        for device, cell in raw["devices"].items():
-            unit_path = UnitPath(site, area, line, cell)
-            if unit_path.device != device:
-                raise ValueError(f"device {device} does not match cell {cell}")
-            for suffix, spec in raw["tags"].items():
+        for device, dev in raw["devices"].items():
+            unit = plant.unit(dev["cell"])
+            if unit.path.device != device:
+                raise ValueError(f"device {device} does not match cell {dev['cell']}")
+            if unit.cls != dev["class"]:
+                raise ValueError(f"{device}: tag map says {dev['class']}, plant says {unit.cls}")
+            for suffix, spec in raw["classes"][dev["class"]].items():
                 cls_ = TopicClass(spec["class"])
                 if cls_ not in (TopicClass.PV, TopicClass.SP):
                     raise ValueError(f"{suffix}: the edge adapter only owns pv/ and sp/")
                 entry = TagEntry(
                     raw_tag=f"{device}.{suffix}",
-                    unit_path=unit_path,
+                    unit_path=unit.path,
                     cls=cls_,
                     name=spec["name"],
                     unit=spec["unit"],

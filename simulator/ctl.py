@@ -1,11 +1,15 @@
 """Demo control from a terminal: the same `_sim/cmd/*` messages the dashboard sends.
 
     python -m simulator.ctl start-batch BR-101 [--recipe v3] [--campaign PC]
+    python -m simulator.ctl start-batch RX-201            (Tuas API train)
+    python -m simulator.ctl start-batch BL-301            (Freiburg tablet line)
     python -m simulator.ctl inject BR-101 ph_probe_drift [--param rate=0.01]
+    python -m simulator.ctl inject RX-201 jacket_fouling
     python -m simulator.ctl clear BR-101 ph_probe_drift
     python -m simulator.ctl speed 600 | pause | resume
     python -m simulator.ctl run-to-day BR-101 4
     python -m simulator.ctl setpoint BR-101 prod_temp 33.5 [--rec R-1] [--reason ...]
+    python -m simulator.ctl setpoint TP-303 comp_force 14
     python -m simulator.ctl abort BR-101
 
 A person issues these, so they carry `src = operator` and connect as the dashboard's
@@ -93,7 +97,9 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("day", type=float)
     sp = sub.add_parser("setpoint")
     sp.add_argument("cell")
-    sp.add_argument("parameter", choices=list(m.Levers.model_fields))
+    sp.add_argument(
+        "parameter", choices=[k for lm in m.LEVER_MODELS.values() for k in lm.model_fields]
+    )
     sp.add_argument("value", type=float)
     sp.add_argument("--rec", help="recommendation id this change follows")
     sp.add_argument("--reason")

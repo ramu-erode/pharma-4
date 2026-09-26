@@ -1,17 +1,11 @@
-"""The simulation engine for one batch on one unit: the shared core (plan task 1.8).
+"""The bioreactor simulation engine for one batch on one unit: the shared core (plan
+task 1.8).
 
 `BatchRun.advance(until_h)` integrates the process and returns what a plant would emit
-in that interval, as plain dataclasses (no pydantic on the hot path):
-
-- `RawOut`   raw DCS samples every publish period (for edge/raw)
-- `LabOut`   daily LIMS results (lab/*)
-- `StateOut` state/batch, state/operation, state/phase/<p> changes
-- `EventOut` events/batch and events/operator
-- `LabelOut` ground-truth fault labels (_sim/faults, ADR-0012)
-- `TruthOut` true state at each publish tick, only when `record_truth=True` (tests)
+in that interval, as the plain dataclasses of `simulator.messages`.
 
 The live runner, backfill and the test harness all drive this class; none of them
-reimplements any of it.
+reimplements any of it. The API and OSD engines (ADR-0019) follow the same interface.
 """
 
 from __future__ import annotations
@@ -20,11 +14,8 @@ import copy
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import numpy as np
-import yaml
-from pydantic import BaseModel
 
 from common.models import (
     BatchEnded,
@@ -44,10 +35,24 @@ from common.models import (
 from simulator import batches as b
 from simulator import faults as fl
 from simulator.control import DoCascade, PhLoop, TemperatureLoop, air_flow, temperature_sp
+from simulator.messages import (
+    DCS_TAGS_FILE,
+    EventOut,
+    LabelOut,
+    LabOut,
+    RawOut,
+    SimMessage,
+    StateOut,
+    TruthOut,
+    load_dcs_tags,
+)
 from simulator.process import Actuators, Params, TrueState, inoculate, step, viability
 from simulator.sensors import SensorBank
 
-DCS_TAGS_FILE = Path(__file__).with_name("dcs_tags.yaml")
+__all__ = [
+    "DCS_TAGS_FILE", "BatchRun", "EventOut", "LabOut", "LabelOut", "RawOut", "SimMessage",
+    "StateOut", "TruthOut", "load_dcs_tags",
+]  # fmt: skip
 
 LAB_UNITS: dict[str, str] = {
     "vcd": "1e6 cells/mL",
@@ -61,62 +66,6 @@ LAB_UNITS: dict[str, str] = {
 HARVEST_TEMP = 20.0
 RECALIBRATE_PH = 0.1  # |probe - blood gas| that triggers a probe recalibration
 INITIAL_VOLUME = 1500.0
-
-
-# --- messages -------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class RawOut:
-    tag: str  # full raw tag, e.g. BR101.AIC-102.PV
-    value: float
-    t: datetime
-    q: Quality = Quality.GOOD
-
-
-@dataclass(slots=True)
-class LabOut:
-    name: str
-    value: float
-    unit: str
-    t: datetime
-
-
-@dataclass(slots=True)
-class StateOut:
-    name: str  # "batch", "operation" or "phase/<phase>"
-    value: str | None
-    t: datetime
-
-
-@dataclass(slots=True)
-class EventOut:
-    name: str  # "batch" or "operator"
-    v: BaseModel
-    t: datetime
-
-
-@dataclass(slots=True)
-class LabelOut:
-    label: FaultLabel
-    t: datetime
-
-
-@dataclass(slots=True)
-class TruthOut:
-    t: datetime
-    t_h: float
-    state: TrueState
-    operation: Operation
-    sp: dict[str, float]
-
-
-SimMessage = RawOut | LabOut | StateOut | EventOut | LabelOut | TruthOut
-
-
-def load_dcs_tags(path: Path = DCS_TAGS_FILE) -> dict[str, str]:
-    """Raw tag suffix -> simulator variable, e.g. {"AIC-102.PV": "ph"}."""
-    return dict(yaml.safe_load(path.read_text())["tags"])
 
 
 # --- engine ---------------------------------------------------------------------------
@@ -182,6 +131,10 @@ class BatchRun:
     @property
     def batch_day(self) -> float:
         return b.batch_day(self.t_h)
+
+    def t_of_day(self, day: float) -> float:
+        """Hours since batch start at batch day `day` (days count from inoculation)."""
+        return b.t_of_day(day)
 
     def ts(self, t_h: float | None = None) -> datetime:
         return self.spec.start + timedelta(

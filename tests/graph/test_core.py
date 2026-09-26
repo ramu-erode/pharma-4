@@ -3,8 +3,10 @@
 from common import models as m
 from common import uns
 from common.levers import actual_levers
+from common.plant import get_plant
 from edge.core import TagMap
 from graph import core, load
+from simulator.batches import BIO_PHASES
 from tests.samples import BATCH, LEVERS, TS, UNIT, samples
 
 
@@ -58,9 +60,91 @@ def test_actual_levers_apply_operator_changes_in_order():
     assert actual_levers(LEVERS, events) == LEVERS.model_copy(update={"prod_temp": 34.0})
 
 
-def test_config_covers_both_units_and_every_phase_class():
-    stmts = load.config_statements("chennai", "upstream", "suite-1")
+def test_config_covers_every_unit_and_every_phase_class():
+    stmts = load.config_statements()
     bound = {(p["cell"], p["phase"]) for q, p in stmts if "BOUND_TO" in q}
-    assert bound == {(c, ph.value) for c in ("BR-101", "BR-102") for ph in m.PhaseClass}
+    bio = {(c, ph.value) for c in ("BR-101", "BR-102") for ph in BIO_PHASES}
+    assert {b for b in bound if b[0].startswith("BR")} == bio
+    plant = get_plant()
+    for cell, unit in plant.units.items():
+        phases = set(plant.classes[unit.cls]["phase_classes"])
+        assert {ph for c, ph in bound if c == cell} == phases, cell
     tags = [p["topic"] for q, p in stmts if q.startswith("MERGE (t:Tag")]
-    assert len(tags) == len(TagMap.load("chennai", "upstream", "suite-1").entries)
+    assert len(tags) == len(TagMap.load().entries)
+    units = {p["cell"]: p for q, p in stmts if "MERGE (u:Equipment" in q}
+    assert set(units) == set(plant.units)
+    assert units["FD-202"]["path"] == "pharmanextgen/tuas/api/train-1/FD-202"
+    sites = {p["id"] for q, p in stmts if "MERGE (s:Site" in q}
+    assert sites == {"grange-castle", "tuas", "freiburg"}
+
+
+def test_recipe_limits_link_only_their_own_process_tags():
+    stmts = load.config_statements()
+    for q, p in stmts:
+        if "FOR_TAG" not in q:
+            continue
+        for topic in p["topics"]:
+            unit = uns.parse(topic).unit
+            recipe_process = "bioreactor" if p["recipe"] in ("v1", "v2", "v3") else None
+            if recipe_process:
+                assert unit.site == "grange-castle", (p["id"], topic)
+            else:
+                assert unit.site != "grange-castle", (p["id"], topic)
+
+
+# --- trains and genealogy (ADR-0018, ADR-0020) --------------------------------------------------
+
+FD = uns.UnitPath("tuas", "api", "train-1", "FD-202")
+
+
+def _stmts(topic: str, payload: m.Payload) -> list[tuple[str, dict]]:
+    return core.handle(topic, payload)
+
+
+def test_an_operation_links_the_batch_to_the_unit_it_ran_on():
+    ev = m.OperationChanged(batch_id=BATCH, previous="Idle", current="Filtration")
+    stmts = _stmts(
+        uns.events(FD, "batch"),
+        m.BatchEventPayload(v=ev, ts=TS, unit=None, batch=BATCH, src=m.Src.SIM),
+    )
+    q, p = stmts[0]
+    assert "MERGE (b)-[:RAN_ON]->(u)" in q and p["cell"] == "FD-202"
+    assert p["id"] == f"{BATCH}/Filtration"
+
+
+def test_a_coa_rejection_sets_the_disposition():
+    ev = m.BatchEnded(batch_id=BATCH, status="COMPLETE", disposition="REJECTED")
+    ((_, p),) = _stmts(
+        uns.events(FD, "batch"),
+        m.BatchEventPayload(v=ev, ts=TS, unit=None, batch=BATCH, src=m.Src.SIM),
+    )
+    assert p["disposition"] == "REJECTED" and p["status"] == "COMPLETE"
+
+
+def test_coa_results_become_outcome_properties():
+    ((q, _),) = _stmts(
+        uns.lab(FD, "yield"), m.ScalarPayload(v=87.2, ts=TS, unit="%", batch=BATCH, src="sim")
+    )
+    assert "o.yield_pct" in q  # YIELD is a Cypher keyword
+    assert (
+        _stmts(
+            uns.lab(FD, "glucose"),
+            m.ScalarPayload(v=1.0, ts=TS, unit="g/L", batch=BATCH, src="sim"),
+        )
+        == []
+    )
+
+
+def test_material_events_build_the_genealogy():
+    made = m.MaterialProduced(batch_id=BATCH, lot=BATCH, material="API", quantity_kg=570.0)
+    used = m.MaterialConsumed(batch_id="B2026-0150", lot=BATCH, material="API", quantity_kg=200.0)
+    ((q1, p1),) = _stmts(
+        uns.events(FD, "material"),
+        m.MaterialEventPayload(v=made, ts=TS, unit="kg", batch=BATCH, src=m.Src.SIM),
+    )
+    ((q2, p2),) = _stmts(
+        uns.events(UNIT, "material"),
+        m.MaterialEventPayload(v=used, ts=TS, unit="kg", batch="B2026-0150", src=m.Src.SIM),
+    )
+    assert "[:PRODUCED]->(l)" in q1 and p1["lot"] == BATCH
+    assert "[c:CONSUMED]->(l)" in q2 and p2["batch"] == "B2026-0150" and p2["kg"] == 200.0

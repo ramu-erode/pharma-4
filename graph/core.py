@@ -4,6 +4,9 @@ Subscriptions (ADR-0004, ADR-0012, ADR-0015): `_meta/tags`, `events/*`, `lab/*`,
 `ai/anomaly/alert/*`, `ai/yield/recommendation`, `_sim/faults`. Never `pv`/`sp`: raw
 values stay out of the graph. Every statement MERGEs on a natural key, so replaying a
 message changes nothing.
+
+A batch can run on several units (ADR-0018): each operation records its unit and links
+the batch to it. `events/material` builds the lot genealogy (ADR-0020).
 """
 
 from __future__ import annotations
@@ -64,11 +67,13 @@ def handle(topic: str, payload: BaseModel | None) -> list[Stmt]:
         case m.BatchEventPayload(v=m.BatchStarted() as ev):
             return _batch_started(ev, unit.cell, payload.ts)
         case m.BatchEventPayload(v=m.OperationChanged() as ev):
-            return _operation_changed(ev, payload.ts)
+            return _operation_changed(ev, unit.cell, payload.ts)
         case m.BatchEventPayload(v=m.PhaseChanged() as ev):
             return _phase_changed(ev, payload.ts)
         case m.BatchEventPayload(v=m.BatchEnded() as ev):
             return _batch_ended(ev, payload.ts)
+        case m.MaterialEventPayload(v=ev):
+            return _material(ev, payload.ts)
         case m.OperatorEventPayload(v=ev):
             return _operator(ev, unit, payload.batch, payload.ts)
         case m.AlertPayload(v=alert):
@@ -104,9 +109,11 @@ def _batch_started(ev: m.BatchStarted, cell: str, ts: datetime) -> list[Stmt]:
         (
             "MERGE (b:Batch {id: $id}) "
             "SET b.start = $ts, b.status = 'RUNNING', b.campaign = $campaign, "
-            "b.recipe = $recipe, b.cell = $cell, b += $levers, b += $planned",
+            "b.recipe = $recipe, b.cell = $cell, b.process = $process, "
+            "b += $levers, b += $planned",
             {
                 "id": ev.batch_id,
+                "process": ev.process,
                 "ts": ts,
                 "campaign": ev.campaign.value,
                 "recipe": ev.recipe,
@@ -126,7 +133,7 @@ def _batch_started(ev: m.BatchStarted, cell: str, ts: datetime) -> list[Stmt]:
     ]
 
 
-def _operation_changed(ev: m.OperationChanged, ts: datetime) -> list[Stmt]:
+def _operation_changed(ev: m.OperationChanged, cell: str, ts: datetime) -> list[Stmt]:
     out: list[Stmt] = []
     if ev.previous is not m.Operation.IDLE:
         out.append(
@@ -140,12 +147,14 @@ def _operation_changed(ev: m.OperationChanged, ts: datetime) -> list[Stmt]:
             (
                 "MATCH (b:Batch {id: $batch}) "
                 "MERGE (o:Operation {id: $id}) SET o.name = $name, o.start = $ts, "
-                "o.batch_id = $batch "
-                "MERGE (b)-[:HAS_OPERATION]->(o)",
+                "o.batch_id = $batch, o.cell = $cell "
+                "MERGE (b)-[:HAS_OPERATION]->(o) "
+                "WITH b MATCH (u:Equipment {id: $cell}) MERGE (b)-[:RAN_ON]->(u)",
                 {
                     "batch": ev.batch_id,
                     "id": op_id(ev.batch_id, ev.current),
                     "name": ev.current.value,
+                    "cell": cell,
                     "ts": ts,
                 },
             )
@@ -199,6 +208,7 @@ def _phase_changed(ev: m.PhaseChanged, ts: datetime) -> list[Stmt]:
 
 def _batch_ended(ev: m.BatchEnded, ts: datetime) -> list[Stmt]:
     aborted = ev.status is m.BatchStatus.ABORTED
+    disposition = ev.disposition or ("REJECTED" if aborted else "ACCEPTED")
     return [
         (
             "MATCH (b:Batch {id: $id}) SET b.end = $ts, b.status = $status, b.end_reason = $reason "
@@ -215,7 +225,7 @@ def _batch_ended(ev: m.BatchEnded, ts: datetime) -> list[Stmt]:
                 "ts": ts,
                 "status": ev.status.value,
                 "reason": ev.reason,
-                "disposition": "REJECTED" if aborted else "ACCEPTED",
+                "disposition": disposition,
                 "aborted": aborted,
             },
         )
@@ -225,24 +235,48 @@ def _batch_ended(ev: m.BatchEnded, ts: datetime) -> list[Stmt]:
 # --- lab outcome ---------------------------------------------------------------------------
 
 
+# CoA and in-process results that describe a batch's outcome (ADR-0019), as Outcome
+# properties. The rest (glucose, lactate, ph_offline) are time series, not outcomes.
+OUTCOME_LAB: dict[str, str] = {
+    "titer": "titer",
+    "viability": "viability",
+    "yield": "yield_pct",  # YIELD is a Cypher keyword
+    "assay": "assay",
+    "free_sa": "free_sa",
+    "related": "related",
+    "lod": "lod",
+    "d50": "d50",
+    "conversion_ipc": "conversion_ipc",
+    "blend_uniformity": "blend_uniformity",
+    "granule_d50": "granule_d50",
+    "bulk_density": "bulk_density",
+    "dissolution": "dissolution",
+    "hardness": "hardness",
+    "friability": "friability",
+    "av": "av",
+}
+
+
 def _lab(name: str, value: float, batch_id: str, ts: datetime) -> list[Stmt]:
     if name == "vcd":
         update = (
             "o.peak_vcd = CASE WHEN o.peak_vcd IS NULL OR $v > o.peak_vcd THEN $v "
             "ELSE o.peak_vcd END"
         )
-    elif name in ("titer", "viability"):
-        # A rejected (aborted) batch has no titer, whatever order the messages arrive in.
+    elif name in OUTCOME_LAB:
+        # Whitelisted names, so safe as property keys. A rejected (aborted) bioreactor
+        # batch has no titer, whatever order the messages arrive in.
+        prop = OUTCOME_LAB[name]
         rejected = "WHEN o.disposition = 'REJECTED' THEN null " if name == "titer" else ""
         update = (
-            f"o.{name} = CASE {rejected}"
-            f"WHEN o.{name}_ts IS NULL OR $ts >= o.{name}_ts THEN $v "
-            f"ELSE o.{name} END, "
-            f"o.{name}_ts = CASE WHEN o.{name}_ts IS NULL OR $ts >= o.{name}_ts THEN $ts "
-            f"ELSE o.{name}_ts END"
+            f"o.{prop} = CASE {rejected}"
+            f"WHEN o.{prop}_ts IS NULL OR $ts >= o.{prop}_ts THEN $v "
+            f"ELSE o.{prop} END, "
+            f"o.{prop}_ts = CASE WHEN o.{prop}_ts IS NULL OR $ts >= o.{prop}_ts THEN $ts "
+            f"ELSE o.{prop}_ts END"
         )
     else:
-        return []  # glucose, lactate, ph_offline are time series, not outcomes
+        return []
     return [
         (
             "MATCH (b:Batch {id: $batch}) "
@@ -300,6 +334,37 @@ def _operator(
             )
         )
     return out
+
+
+def _material(ev: m.MaterialProduced | m.MaterialConsumed, ts: datetime) -> list[Stmt]:
+    """Lot genealogy (ADR-0020): Batch-[:PRODUCED]->MaterialLot<-[:CONSUMED]-Batch."""
+    lot = (
+        "MERGE (mat:Material {id: $material}) "
+        "MERGE (l:MaterialLot {id: $lot}) SET l.material = $material "
+        "MERGE (l)-[:OF]->(mat) "
+    )
+    params = {
+        "material": ev.material,
+        "lot": ev.lot,
+        "batch": ev.batch_id,
+        "kg": ev.quantity_kg,
+        "ts": ts,
+    }
+    if isinstance(ev, m.MaterialProduced):
+        return [
+            (
+                lot + "SET l.quantity_kg = $kg, l.produced_at = $ts "
+                "WITH l MATCH (b:Batch {id: $batch}) MERGE (b)-[:PRODUCED]->(l)",
+                params,
+            )
+        ]
+    return [
+        (
+            lot + "WITH l MATCH (b:Batch {id: $batch}) "
+            "MERGE (b)-[c:CONSUMED]->(l) SET c.quantity_kg = $kg, c.ts = $ts",
+            params,
+        )
+    ]
 
 
 def _alert(alert: m.Alert, unit: uns.UnitPath, batch_id: str | None) -> list[Stmt]:

@@ -37,3 +37,13 @@ def manifest(models_dir: str, name: str) -> dict[str, Any] | None:
 def load(models_dir: str, name: str) -> Any | None:
     model_path, _ = paths(models_dir, name)
     return joblib.load(model_path) if model_path.exists() else None
+
+
+def anomaly_name(cls: str) -> str:
+    """The anomaly model of an equipment class (ADR-0021), e.g. anomaly-reactor."""
+    return f"anomaly-{cls}"
+
+
+def yield_name(process: str) -> str:
+    """The yield model of a process (ADR-0021), e.g. yield-api."""
+    return f"yield-{process}"

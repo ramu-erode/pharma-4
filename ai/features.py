@@ -6,7 +6,12 @@ values (irregular). `window_features` holds each signal's last value forward on 
 calls it for every window of a historical batch; the live service calls it for the
 window that just closed. Same function, same inputs, same numbers (parity test).
 
-Time is minutes since the batch's origin (its BATCH_START).
+Time is minutes since the batch's origin (its BATCH_START, or for a unit of a train,
+when the batch arrived on it).
+
+The constants and `window_features` here are the bioreactor's. The other equipment
+classes bring their own signals and feature functions (`ai.profiles`, ADR-0021); the
+series, the grid and the stuck/quality checks are shared.
 """
 
 from __future__ import annotations
@@ -58,28 +63,35 @@ _T_H = (np.arange(WINDOW_MIN) - (WINDOW_MIN - 1) / 2) / 60.0  # centred window t
 _T_SS = float((_T_H**2).sum())
 
 
-def signal_of_topic(topic: str) -> str | None:
+def signal_of_topic(topic: str, pv: tuple[str, ...] = PV, sp: tuple[str, ...] = SP) -> str | None:
     """pv/ph -> "ph", sp/ph -> "sp_ph"; None for anything that is not a feature input."""
     try:
         p = uns.parse(topic)
     except uns.TopicError:
         return None
-    if p.cls is TopicClass.PV and p.name in PV:
+    if p.cls is TopicClass.PV and p.name in pv:
         return p.name
-    if p.cls is TopicClass.SP and f"sp_{p.name}" in SP:
+    if p.cls is TopicClass.SP and f"sp_{p.name}" in sp:
         return f"sp_{p.name}"
     return None
 
 
 @dataclass
 class Series:
-    """Published values of one batch, per signal, in arrival order."""
+    """Published values of one batch on one unit, per signal, in arrival order."""
 
     origin: datetime
-    t: dict[str, list[float]] = field(default_factory=lambda: {s: [] for s in SIGNALS})
-    v: dict[str, list[float]] = field(default_factory=lambda: {s: [] for s in SIGNALS})
-    uncertain: dict[str, list[bool]] = field(default_factory=lambda: {s: [] for s in SIGNALS})
+    signals: tuple[str, ...] = SIGNALS
+    t: dict[str, list[float]] = field(default_factory=dict)
+    v: dict[str, list[float]] = field(default_factory=dict)
+    uncertain: dict[str, list[bool]] = field(default_factory=dict)
     _arrays: dict[str, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        for s in self.signals:
+            self.t.setdefault(s, [])
+            self.v.setdefault(s, [])
+            self.uncertain.setdefault(s, [])
 
     def add(self, signal: str, ts: datetime, value: float, uncertain: bool = False) -> None:
         self.t[signal].append((ts - self.origin).total_seconds() / 60.0)
@@ -100,11 +112,11 @@ class Series:
 
 
 def grid(series: Series, start: int, stop: int) -> np.ndarray:
-    """Values held forward on minutes [start, stop): shape (stop-start, len(SIGNALS)).
+    """Values held forward on minutes [start, stop): shape (stop-start, len(signals)).
     A minute's value is the last one published at or before the end of that minute."""
     minutes = np.arange(start, stop, dtype=float) + 1.0
-    out = np.full((stop - start, len(SIGNALS)), np.nan)
-    for j, s in enumerate(SIGNALS):
+    out = np.full((stop - start, len(series.signals)), np.nan)
+    for j, s in enumerate(series.signals):
         t, v = series.arrays(s)
         if len(t) == 0:
             continue
@@ -122,6 +134,11 @@ def last_bolus(series: Series, end: int) -> float | None:
         return None
     rises = np.nonzero(np.diff(v[:n]) > BOLUS_STEP)[0]
     return float(t[rises[-1] + 1]) if len(rises) else None
+
+
+def slope(y: np.ndarray) -> float:
+    """Least-squares slope per hour over a 30-minute window."""
+    return float(((y - y.mean()) * _T_H).sum() / _T_SS)
 
 
 def _slope(y: np.ndarray) -> float:
@@ -169,11 +186,13 @@ def window_features(series: Series, end: int, inoculation_min: float) -> np.ndar
     )
 
 
-def stuck_signals(series: Series, end: int, repeats: int = 3) -> list[str]:
+def stuck_signals(
+    series: Series, end: int, repeats: int = 3, analog: tuple[str, ...] = ANALOG
+) -> list[str]:
     """Analog signals whose last `repeats` published values before `end` are identical.
     A healthy sensor always carries noise, so exact repeats mean a stuck reading (Q8)."""
     out = []
-    for s in ANALOG:
+    for s in analog:
         t, v = series.arrays(s)
         n = int(np.searchsorted(t, end, side="left"))
         if n >= repeats and np.all(v[n - repeats : n] == v[n - 1]):
@@ -184,7 +203,7 @@ def stuck_signals(series: Series, end: int, repeats: int = 3) -> list[str]:
 def uncertain_signals(series: Series, end: int) -> list[str]:
     """Signals whose latest published quality before `end` is not GOOD."""
     out = []
-    for s in SIGNALS:
+    for s in series.signals:
         t, _ = series.arrays(s)
         n = int(np.searchsorted(t, end, side="left"))
         if n and series.uncertain[s][n - 1]:

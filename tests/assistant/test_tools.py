@@ -46,7 +46,7 @@ def test_describe_model(client):
 def test_find_objects_by_type_and_text(client):
     out = call(client, "find_objects", type_element_id="BatchType", text="0142")
     assert out["total"] == 1 and out["objects"][0]["elementId"] == "B2026-0142"
-    assert call(client, "find_objects", root_only=True)["total"] == 4
+    assert call(client, "find_objects", root_only=True)["total"] == 5
 
 
 def test_describe_related_and_values(client):

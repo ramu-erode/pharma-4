@@ -1,12 +1,12 @@
-# Pharma 4.0 POC — Bioreactor UNS, Knowledge Graph & AI Architecture
+# Pharma 4.0 POC — Multi-site UNS, Knowledge Graph & AI Architecture
 
-Architecture reference for the pharma-4 POC. The decisions behind it are recorded in [docs/adr](adr/README.md). Last updated 2026-09-23.
+Architecture reference for the pharma-4 POC. The decisions behind it are recorded in [docs/adr](adr/README.md). Last updated 2026-09-26.
 
-> This revision reflects ADR-0009 to ADR-0015. Where it differs from the earlier revision, the ADR named in the section says why.
+> This revision reflects ADR-0009 to ADR-0021. Where it differs from the earlier revision, the ADR named in the section says why. The bioreactor sections below describe Grange Castle; [Sites and processes](#sites-and-processes) covers the enterprise, the Tuas and Freiburg processes, genealogy and the AI profiles (ADR-0018 to ADR-0021).
 
 ## Purpose & scope
 
-The POC proves that one simulated fed-batch bioreactor can publish into a Unified Namespace, be modelled in a knowledge graph, and drive two AI use cases: live anomaly detection and batch yield optimization. It runs on one laptop with `docker compose up`, and reaches demo-ready without any manual steps.
+The POC proves that a simulated manufacturing network — a biologics site, an API site and a tablet site of one fictitious company, **PharmaNextGen** — can publish into a Unified Namespace, be modelled in a knowledge graph, and drive two AI use cases: live anomaly detection and batch yield optimization. It runs on one laptop with `docker compose up`, and reaches demo-ready without any manual steps.
 
 **Questions the POC must answer with a live demo**
 
@@ -18,11 +18,12 @@ The POC proves that one simulated fed-batch bioreactor can publish into a Unifie
 
 **In scope**
 
-- One site, one area, two bioreactors (BR-101, BR-102), so the graph and UNS show more than one asset
+- Three sites (ADR-0018): Grange Castle with two bioreactors (BR-101, BR-102); Tuas with an aspirin API train (RX-201, FD-202); Freiburg with an aspirin tablet line (BL-301, RC-302, TP-303) that consumes Tuas lots
+- Material genealogy across sites (ADR-0020)
 - A Python simulator with a hidden true state, a sensor model, closed-loop control, injected faults and a titer outcome per batch
 - Mosquitto broker, edge adapter, TimescaleDB history, Neo4j graph, anomaly and yield services, Streamlit dashboard
 - A read-only i3X 1.0 API over those stores, and an LLM assistant that reads only through it
-- 200 historical batches, generated automatically on first start
+- 480 historical batches (200 bioreactor, 140 API, 140 tablet), generated automatically on first start
 
 **Out of scope**
 
@@ -59,7 +60,7 @@ flowchart LR
   UI -->|_sim/cmd| MQ
   NEO --> UI
   TS --> UI
-  MQ -->|pharmaco/#| I3X[i3X read API<br/>:8600/v1]
+  MQ -->|pharmanextgen/#| I3X[i3X read API<br/>:8600/v1]
   NEO -. address space .-> I3X
   TS -. history .-> I3X
   I3X -->|i3X only| ASK[Assistant<br/>Ask page, CLI]
@@ -88,7 +89,7 @@ flowchart LR
 (ADR-0009)
 
 - `ts` is **simulated plant time**. The source stamps it and the edge adapter never restamps it. Deadband floor, feature windows, batch days and alert hysteresis all count in `ts`.
-- Liveness is judged by **wall-clock** time. Every service publishes a retained `pharmaco/_meta/<service>/status` heartbeat every 30 s of wall-clock time, and registers an MQTT last-will of `offline`. Nothing compares `ts` with `now()`.
+- Liveness is judged by **wall-clock** time. Every service publishes a retained `pharmanextgen/_meta/<service>/status` heartbeat every 30 s of wall-clock time, and registers an MQTT last-will of `offline`. Nothing compares `ts` with `now()`.
 - The simulator integrates on a 5 s step and **publishes raw samples every 60 simulated seconds** by default (configurable; 5 s is sensible at 1×).
 - **Speed** is set at runtime: pause, 1×, 60×, 600×, 3600×, or "run to day N, then pause". At 3600× a 14-day batch takes about 6 minutes and raw traffic is about 1.8k msg/s.
 - The clock is **monotonic**. On start, sim time = `max(wall-clock now, latest ts in retained state/*)`.
@@ -151,8 +152,10 @@ The UNS follows the ISA-95 hierarchy Enterprise / Site / Area / Line / Cell. A t
 **Topic tree**
 
 ```
-pharmaco/                                   # enterprise
-  chennai/upstream/suite-1/                 # site / area / line
+pharmanextgen/                              # enterprise (ADR-0018)
+  tuas/api/train-1/RX-201/ … FD-202/        # API train: reactor-crystallizer, filter-dryer
+  freiburg/osd/line-1/BL-301/ … RC-302/ … TP-303/   # tablet line
+  grange-castle/upstream/suite-1/           # site / area / line
     BR-101/                                 # cell (equipment)
       pv/temperature | ph | do | agitation | air_flow | o2_flow | co2_flow
          | feed_total | base_total | pressure | weight          (edge adapter)
@@ -163,6 +166,7 @@ pharmaco/                                   # enterprise
       state/phase/temp_ctrl | ph_ctrl | do_ctrl | feed_add   # RUNNING / HELD / COMPLETE
       events/batch                          # start, operation change, harvest, abort
       events/operator                       # manual setpoint changes
+      events/material                       # lots produced / consumed (ADR-0020)
       ai/anomaly/score
       ai/anomaly/alert/<layer>-<tag|class>  # one retained topic per open alert
       ai/yield/prediction
@@ -180,6 +184,8 @@ _sim/                                       # outside the UNS; does not exist in
   cmd/batch | fault | clock | setpoint      # demo control (dashboard, simulator.ctl)
   clock                                     # sim time and speed
   faults/<unit>                             # ground-truth labels
+  inventory                                 # Freiburg's API stock (simulator, ADR-0020)
+  opening_stock                             # stock at the end of backfill (bootstrap)
 ```
 
 **Payload** (ADR-0002, ADR-0013). Every payload carries all six keys. `v` is typed per topic class in `common/models.py`: a float for `pv`, `sp`, `lab` and `ai/anomaly/score`; a string enum for `state/*`; a nested model for events, alerts and recommendations. `unit` is null where it does not apply. `src` is one of `sim`, `edge`, `anomaly`, `yield`, `operator`. `historian`, `graph-sync`, `dashboard` and `i3x` also exist, but only as the source of those services' own heartbeats. Commands on `_sim/cmd/*` carry `src = operator`, because a person issues them.
@@ -216,23 +222,24 @@ This table lives in code as `common.uns.delivery()`.
 
 | User | Write | Read |
 | --- | --- | --- |
-| simulator | `edge/raw/#`, `…/lab/#`, `…/state/#`, `…/events/#`, `_sim/clock`, `_sim/faults/#`, `_meta/simulator/#` | `_sim/cmd/#`, `…/state/#` |
+| simulator | `edge/raw/#`, `…/lab/#`, `…/state/#`, `…/events/#`, `_sim/clock`, `_sim/faults/#`, `_sim/inventory`, `_meta/simulator/#` | `_sim/cmd/#`, `…/state/#`, `_sim/inventory`, `_sim/opening_stock` |
+| bootstrap | `_sim/opening_stock` | — |
 | edge-adapter | `…/pv/#`, `…/sp/#`, `edge/unmapped`, `_meta/tags/#`, `_meta/edge-adapter/#` | `edge/raw/#`, `…/state/batch` |
-| historian | `_meta/historian/#` | `pharmaco/#`, `_sim/faults/#` |
-| graph-sync | `_meta/graph-sync/#` | `pharmaco/#` (pv unused), `_sim/faults/#` |
-| anomaly | `…/ai/anomaly/#`, `_meta/anomaly/#` | `pharmaco/#` — **no `_sim/#`** |
-| yield | `…/ai/yield/#`, `_meta/yield/#` | `pharmaco/#` — **no `_sim/#`** |
-| dashboard | `_sim/cmd/#`, `_meta/dashboard/#` | `pharmaco/#`, `edge/#`, `_sim/clock`, `_sim/faults/#` |
-| i3x | `_meta/i3x/#` | `pharmaco/#` — **no `_sim/#`**: whatever it serves, an LLM may see |
+| historian | `_meta/historian/#` | `pharmanextgen/#`, `_sim/faults/#` |
+| graph-sync | `_meta/graph-sync/#` | `pharmanextgen/#` (pv unused), `_sim/faults/#` |
+| anomaly | `…/ai/anomaly/#`, `_meta/anomaly/#` | `pharmanextgen/#` — **no `_sim/#`** |
+| yield | `…/ai/yield/#`, `_meta/yield/#` | `pharmanextgen/#` — **no `_sim/#`** |
+| dashboard | `_sim/cmd/#`, `_meta/dashboard/#` | `pharmanextgen/#`, `edge/#`, `_sim/clock`, `_sim/faults/#`, `_sim/inventory` |
+| i3x | `_meta/i3x/#` | `pharmanextgen/#` — **no `_sim/#`**: whatever it serves, an LLM may see |
 | healthcheck | — | `$SYS/#` (compose healthcheck only) |
 | explorer | — | `#` (a person with MQTT Explorer; never a service) |
 
-Heartbeat topics use the compose service name: `pharmaco/_meta/<service>/status`, so the edge adapter's is `_meta/edge-adapter/status`.
+Heartbeat topics use the compose service name: `pharmanextgen/_meta/<service>/status`, so the edge adapter's is `_meta/edge-adapter/status`.
 
 **Rules that keep the UNS clean**
 
 - Only the owner of a node publishes to it (see ACL). If a publish needs a new branch, update the ACL in the same change.
-- Consumers subscribe with wildcards, for example `pharmaco/+/+/+/+/pv/#` for all live process values.
+- Consumers subscribe with wildcards, for example `pharmanextgen/+/+/+/+/pv/#` for all live process values.
 - Topic names are lowercase and stable. Units and limits live in `_meta`, not in the name. Topics are built only through `common/uns.py`.
 
 ## Edge adapter
@@ -398,6 +405,60 @@ Advisory only (ADR-0015).
 
 **Honest limits.** The simulator has a known ground-truth yield function, so optimizer quality is measurable here, and the measurement above is the honest result. Real plants will need far more batches, and a designed experiment is still the proper way to move a validated setpoint.
 
+## Sites and processes
+
+(ADR-0018 to ADR-0021)
+
+**The enterprise.** `config/plant.yaml` holds enterprise → sites → areas → lines → units. Every unit names its equipment class (`bioreactor`, `reactor`, `filter_dryer`, `blender`, `roller_compactor`, `tablet_press`); every line names its process (`bioreactor`, `api`, `osd`). Modules, sensors, phase bindings, edge tags and DCS tags are defined once per class. `common/plant.py` is the only reader.
+
+| Site | Process | Units (train order) | Batch | Yield target |
+| --- | --- | --- | --- | --- |
+| Grange Castle, Dublin | CHO mAb fed-batch | BR-101, BR-102 (each runs whole batches) | ~14.5 days | titer, g/L |
+| Tuas, Singapore | aspirin API | RX-201 → FD-202 | ~30 h | yield, % |
+| Freiburg, Germany | aspirin 500 mg tablets | BL-301 → RC-302 → TP-303 | ~9 h | yield, % |
+
+**Batches that move.** An API or tablet batch holds its whole train and runs one unit at a time. Each unit publishes its own `state/batch` and `state/operation`. `BATCH_START` is on the first unit and `BATCH_END` on the last. graph-sync links `RAN_ON` per operation, and attribution joins a unit's tags only to that unit's operations. Batch ids stay global across sites; with the default history the first live batch is B2026-0480.
+
+**API process** (`simulator/api/`). The mechanisms, all in one reactor-crystallizer plus a filter-dryer:
+
+- second-order acetylation with two side reactions;
+- an exotherm held by a stiff temperature loop and a dosing interlock;
+- a quench;
+- a seeded moment-model cooling crystallisation;
+- Darcy cake filtration;
+- vacuum drying with hydrolysis.
+
+In-line Raman, FBRM and NIR go to `pv/*`. The IPC and the CoA go to `lab/*`. Levers: `rxn_temp`, `ac2o_ratio`, `rxn_time`, `cool_rate`, `dry_temp`; each has an interior optimum for yield. Faults: `jacket_fouling`, `dosing_meter_drift`, `agitator_degradation`, `filter_blinding`, `vacuum_leak`, `stuck_sensor`.
+
+**Tablet process** (`simulator/osd/`). Dry granulation, because aspirin hydrolyses. The mechanisms:
+
+- NIR blend uniformity;
+- ribbon density from roll force, and from it granule fines and work-hardening;
+- tablet hardness, capping, chipping, sticking and weight variation;
+- checkweigher rejects;
+- dissolution, which depends on hardness, lubrication and **the API lot's particle size**;
+- humidity-driven free SA.
+
+Levers: `lube_time`, `roll_force`, `comp_force`, `turret_speed`, `feed_frame`. Faults: `roll_force_drift`, `punch_sticking`, `hopper_bridging`, `hvac_humidity`, `stuck_sensor`.
+
+**Genealogy** (ADR-0020). A lot's id is its batch id. The simulator publishes `events/material`: `MATERIAL_PRODUCED` at FD-202 and TP-303, and `MATERIAL_CONSUMED` at BL-301, one event per API lot. The graph builds `(:Batch)-[:PRODUCED]->(:MaterialLot)<-[:CONSUMED {quantity_kg}]-(:Batch)`, and i3X serves the lots under `materials`.
+
+- Freiburg draws on released lots first in, first out. In history a lot is released 21 days after its batch ends, and ships to Freiburg only while Freiburg holds under 600 kg.
+- The simulator keeps the stock on retained `_sim/inventory`. Bootstrap hands it the stock left at the end of history on `_sim/opening_stock`.
+
+**AI profiles** (ADR-0021). The anomaly service runs one model per equipment class. An `AnomalyProfile` holds the class's signals, window features, scored operations, alignment and settling rules, limit features and fault heuristic. Units off the bioreactor align on hours since their operation started, and settle for the first 45 minutes of each operation. The blender is not scored: its operations are shorter than one window.
+
+The yield service runs one model per process. A `YieldProfile` holds the target, levers, exposure, gate and cadence:
+
+| Process | Predicts | Frozen once | Min gain |
+| --- | --- | --- | --- |
+| API | hourly from Reaction to the end of Drying | Ac2O ratio: dosing starts | 0.5 % yield |
+| Tablets | every 30 minutes through Compaction and Compression | lubrication time: blending ends | 0.5 % yield |
+
+- Train predictions and advice are published on the train's first unit.
+- Each process has its own DoE response surface (ADR-0015).
+- The fault harness for the trains (`tests/ai/test_fault_harness_trains.py`) holds every API and tablet fault to the same standard as the bioreactor's. Developing faults (jacket fouling, vacuum leak, roll-force drift, punch sticking, HVAC failure) must alert before the true process breaches its action limit. The others must alert within a set delay.
+
 ## Storage, dashboard & service layout
 
 One `Dockerfile` and one Python image. Each Python compose service runs a different `python -m …`, with its own MQTT user. It needs roughly 4 GB RAM.
@@ -407,7 +468,7 @@ One `Dockerfile` and one Python image. Each Python compose service runs a differ
 | mosquitto | eclipse-mosquitto:2 | 1883 | — |
 | timescaledb | timescale/timescaledb:latest-pg16 | 5432 | — |
 | neo4j | neo4j:5-community | 7474, 7687 | — |
-| bootstrap (one-shot) | pharma-4 | — | timescaledb, neo4j |
+| bootstrap (one-shot) | pharma-4 | — | mosquitto, timescaledb, neo4j |
 | simulator | pharma-4 | — | mosquitto |
 | edge-adapter | pharma-4 | — | mosquitto |
 | historian | pharma-4 | — | mosquitto, timescaledb |
@@ -475,13 +536,13 @@ pharma-4/
 | i3X | Served from |
 | --- | --- |
 | Object types, objects, relationships | Neo4j, rebuilt into an address space every 5 s (`i3x/catalog.py` → `i3x/space.py`) |
-| Current value | Last-value cache fed by `pharmaco/#` |
+| Current value | Last-value cache fed by `pharmanextgen/#` |
 | History | `tag_values` (numbers) and `uns_events` (structured payloads), up to 20,000 points per element per request, 206 beyond |
 | Subscriptions | Sync queues fed by the same broker feed; a registration queues the current value first |
 
 The address space has four roots:
 
-- `pharmaco`: site > area > line > bioreactor through `HasChildren`. Inside each bioreactor, through `HasComponent`, are its equipment modules, control modules, tags, sensors, and its state, lab and AI data points. Reading a bioreactor with `maxDepth: 0` returns its whole live state.
+- `pharmanextgen`: site > area > line > bioreactor through `HasChildren`. Inside each bioreactor, through `HasComponent`, are its equipment modules, control modules, tags, sensors, and its state, lab and AI data points. Reading a bioreactor with `maxDepth: 0` returns its whole live state.
 - `batches`: each batch's value holds its recipe, planned and actual levers, outcome and operation/phase timeline. Its children are its alerts, operator actions and recommendations.
 - `recipes`
 - `phase-classes`: linked to modules through `Controls` and `Monitors`.
@@ -527,7 +588,7 @@ The POC deliberately skips validation, but its design mirrors what a GMP version
 
 ## Build plan & demo
 
-Six increments, each ending with something demoable.
+Seven increments, each ending with something demoable.
 
 | # | Increment | Demo at the end |
 | --- | --- | --- |
@@ -537,11 +598,12 @@ Six increments, each ending with something demoable.
 | 4 | Features, anomaly layers 1–3 with alignment and suppression, alert lifecycle, fault harness, evaluation notebook | Inject pH probe drift live: the PV stays perfect, the CO2 EWMA alert fires before the true pH breaches; DO fouling with PCA contributions |
 | 5 | Yield ensemble and quantiles, optimizer with frozen/open levers and paired gate, DCS console, SHAP, dashboard Demo sidebar | Mid-batch band narrows; recommendation with gain; operator applies it; graph links advice → action → outcome |
 | 6 | i3X 1.0 read API over the three stores (ADR-0016); LLM assistant reading only through it, Ask page and CLI (ADR-0017) | CESMII's conformance suite: 1.0 Compatible. Ask "why is this batch's predicted titer falling?" and watch the i3X calls behind the answer; the same plant through CESMII's MCP server |
+| 7 | PharmaNextGen: three sites, the Tuas API train and the Freiburg tablet line, material genealogy, anomaly and yield profiles per class and process (ADR-0018 to ADR-0021) | Start an API batch at Tuas and a tablet batch at Freiburg; inject jacket fouling on RX-201 and watch the reactor alert hours before it falls behind its ramp; trace a slow-dissolving tablet batch back to a coarse Tuas lot on the Graph page |
 
 **Parked increments** (not planned; recorded so they are not lost)
 
-- 7 — PI Web API-shaped endpoint on the simulator, plus a second edge input, to show the ADR-0005 swap path
-- 8 — Downstream area (harvest / chromatography) with cross-area batch genealogy
+- PI Web API-shaped endpoint on the simulator, plus a second edge input, to show the ADR-0005 swap path
+- Downstream area (harvest / chromatography) at Grange Castle; film coating and packaging at Freiburg
 
 TimescaleDB stays (ADR-0004). InfluxDB is only revisited if a client's stack requires it.
 

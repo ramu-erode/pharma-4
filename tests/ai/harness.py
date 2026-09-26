@@ -36,7 +36,7 @@ CASES: dict[FaultType, tuple[float, dict, str | float]] = {
 
 
 def _tag_map() -> TagMap:
-    return TagMap.load(SETTINGS.site, SETTINGS.area, SETTINGS.line)
+    return TagMap.load()
 
 
 def _clean(spec: b.BatchSpec) -> train.BatchInput:

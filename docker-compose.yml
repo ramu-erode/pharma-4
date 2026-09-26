@@ -23,7 +23,7 @@ x-python-env: &python-env
   MODELS_DIR: /models
 
 services:
-  # One-shot first start: migrations, backfill (and later graph load and training).
+  # One-shot first start: migrations, config, backfill, stock handover, training.
   # Idempotent; services that need its results wait for it to complete (ADR-0010).
   bootstrap:
     <<: *python
@@ -35,6 +35,7 @@ services:
     volumes:
       - models:/models
     depends_on:
+      mosquitto: {condition: service_healthy}
       timescaledb: {condition: service_healthy}
       neo4j: {condition: service_healthy}
 

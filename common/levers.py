@@ -9,22 +9,39 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from common.models import Levers, OperatorEvent
+from pydantic import BaseModel
+
+from common.models import OperatorEvent
 
 
-def actual_levers(planned: Levers, operator_events: Iterable[OperatorEvent]) -> Levers:
+def actual_levers[L: BaseModel](planned: L, operator_events: Iterable[OperatorEvent]) -> L:
+    """Works for any process's levers (ADR-0018): changes to other fields are ignored."""
     levers = planned
     for ev in operator_events:
-        if ev.parameter in Levers.model_fields:
+        if ev.parameter in type(planned).model_fields:
             levers = levers.model_copy(update={ev.parameter: ev.new})
     return levers
 
 
-# Which UNS tag an operator change of each lever acts on (for Event-[:ON_TAG]->Tag).
+# Which UNS tag an operator change of each lever acts on (for Event-[:ON_TAG]->Tag), on
+# the unit the change is published on. Lever names are unique across processes.
 LEVER_TAG: dict[str, tuple[str, str]] = {
+    # bioreactor
     "shift_day": ("sp", "temperature"),
     "prod_temp": ("sp", "temperature"),
     "ph_sp": ("sp", "ph"),
     "do_sp": ("sp", "do"),
     "feed_mult": ("pv", "feed_total"),
+    # API: RX-201, except the dryer jacket on FD-202
+    "rxn_temp": ("sp", "temperature"),
+    "ac2o_ratio": ("sp", "dose_flow"),
+    "rxn_time": ("sp", "temperature"),
+    "cool_rate": ("sp", "temperature"),
+    "dry_temp": ("sp", "jacket_temperature"),
+    # OSD: BL-301, RC-302, TP-303
+    "lube_time": ("sp", "speed"),
+    "roll_force": ("sp", "roll_force"),
+    "comp_force": ("sp", "comp_force"),
+    "turret_speed": ("sp", "turret_speed"),
+    "feed_frame": ("sp", "feed_frame"),
 }

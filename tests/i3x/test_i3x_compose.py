@@ -14,7 +14,7 @@ from common.settings import get_settings
 
 pytestmark = pytest.mark.compose
 
-UNIT = uns.UnitPath("chennai", "upstream", "suite-1", "BR-101")
+UNIT = uns.UnitPath("grange-castle", "upstream", "suite-1", "BR-101")
 
 
 @pytest.fixture(scope="module")
@@ -32,7 +32,7 @@ def test_info_is_open_and_data_is_not():
 def test_backfilled_batches_are_objects(i3x):
     batches = i3x.objects("BatchType")
     assert len(batches) >= 200
-    assert {o["elementId"] for o in i3x.objects(root=True)} >= {"pharmaco", "batches"}
+    assert {o["elementId"] for o in i3x.objects(root=True)} >= {"pharmanextgen", "batches"}
 
 
 def test_a_unit_reads_as_one_live_tree(i3x):
@@ -54,3 +54,20 @@ def test_history_of_a_completed_batch(i3x):
     results, note = i3x.history([uns.pv(UNIT, "ph"), uns.lab(UNIT, "titer")], start, end)
     counts = [len(r["result"]["values"]) for r in results]
     assert note is None and all(c > 0 for c in counts)
+
+
+def test_every_site_and_the_genealogy_are_served(i3x):
+    roots = {o["elementId"] for o in i3x.objects(root=True)}
+    assert "materials" in roots
+    sites = {o["elementId"] for o in i3x.objects("SiteType")}
+    assert sites == {f"pharmanextgen/{s}" for s in ("grange-castle", "tuas", "freiburg")}
+    assert i3x.objects("RotaryTabletPressType") and i3x.objects("FilterDryerType")
+    ids = [o["elementId"] for o in i3x.objects("BatchType")]
+    tablets = [v for r in i3x.value(ids) if (v := r["result"]["value"])["process"] == "osd"]
+    assert len(tablets) >= 140
+    used = next(t for t in tablets if t["lotsConsumed"])
+    lot = used["lotsConsumed"][0]["lot"]
+    [r] = i3x.value([f"lot/{lot}"])
+    made = r["result"]["value"]
+    assert made["producedBy"] == lot
+    assert used["batchId"] in {c["batch"] for c in made["consumedBy"]}

@@ -1,0 +1,3 @@
+# Force LF in the working tree: shell scripts, the Dockerfile and mosquitto config
+# break inside Linux containers when a Windows checkout converts them to CRLF.
+* text=auto eol=lf

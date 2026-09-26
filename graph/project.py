@@ -1,7 +1,8 @@
 """Attribution projection: the graph's answer to ADR-0006, flattened into TimescaleDB.
 
 For tag X on unit U at time t:
-  1. phase instances running on U at t (the batch's operations and their phases),
+  1. phase instances running on U at t (the batch's operations on U and their phases;
+     a train batch runs on several units, ADR-0018),
   2. keep those whose phase class is BOUND_TO X, directly or through X's equipment
      module, with the binding's role (control / monitor),
   3. none left -> fall back to the operation (phase and role null).
@@ -24,6 +25,7 @@ OPEN_END = datetime(9999, 12, 31, tzinfo=UTC)  # interval still open (live batch
 QUERY = """
 MATCH (b:Batch {id: $batch})-[:RAN_ON]->(u:Equipment)
 MATCH (b)-[:HAS_OPERATION]->(op:Operation)
+WHERE op.cell = u.id OR op.cell IS NULL
 MATCH (u)-[:HAS_EM]->(:EquipmentModule)-[:HAS_CM]->(:ControlModule)-[:HAS_TAG]->(t:Tag)
 OPTIONAL MATCH (op)-[:HAS_PHASE]->(pi:PhaseInstance)-[:INSTANCE_OF]->(:PhaseClass)
                -[bt:BOUND_TO {unit: u.id}]->(m)

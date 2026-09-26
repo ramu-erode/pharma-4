@@ -19,7 +19,7 @@ from tests.simulator.conftest import make_spec
 
 T0 = datetime(2026, 9, 24, tzinfo=UTC)
 S = Settings()
-TM = TagMap.load(S.site, S.area, S.line)
+TM = TagMap.load()
 
 
 def test_grid_holds_last_value_forward():

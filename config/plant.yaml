@@ -1,44 +1,183 @@
-# Plant configuration: the stand-in for a DeltaV FHX export (ADR-0006, ADR-0011).
+# Plant configuration: the stand-in for DeltaV FHX exports (ADR-0006, ADR-0011, ADR-0018).
 # graph-sync loads it straight into Neo4j at bootstrap. It is configuration, not data:
-# nothing publishes it over MQTT.
+# nothing publishes it over MQTT. common/plant.py is the only module that reads it.
 #
-# Hierarchy: Site > Area > Line > Unit (Equipment) > Equipment module > Control module.
+# Hierarchy: Enterprise > Site > Area > Line > Unit (Equipment) > Equipment module >
+# Control module. Each line runs one process (bioreactor, api, osd). Each unit names its
+# equipment class, and modules, sensors and phase bindings are defined once per class.
 # Control-module ids match the loop part of the raw DCS tag (AIC-102 in BR101.AIC-102.PV),
 # which is how control modules find their UNS tags.
 
-site: {id: chennai, name: Chennai}
-area: {id: upstream, name: Upstream processing}
-line: {id: suite-1, name: Suite 1}
+enterprise: {id: pharmanextgen, name: PharmaNextGen}
 
-# Both bioreactors are built the same, so modules and bindings below apply to each.
-units:
-  BR-101: {type: Bioreactor, working_volume_l: 2000}
-  BR-102: {type: Bioreactor, working_volume_l: 2000}
+sites:
+  grange-castle:
+    name: Grange Castle
+    location: Dublin, Ireland
+    role: Biologics drug substance
+    areas:
+      upstream:
+        name: Upstream processing
+        lines:
+          suite-1:
+            name: Suite 1
+            process: bioreactor
+            units:
+              BR-101: {type: Bioreactor, class: bioreactor, working_volume_l: 2000}
+              BR-102: {type: Bioreactor, class: bioreactor, working_volume_l: 2000}
+  tuas:
+    name: Tuas
+    location: Singapore
+    role: Small-molecule API
+    areas:
+      api:
+        name: API manufacturing
+        lines:
+          train-1:
+            name: Train 1
+            process: api
+            # A batch runs on the units of a train in this order (ADR-0018).
+            units:
+              RX-201: {type: ReactorCrystallizer, class: reactor, working_volume_l: 4000}
+              FD-202: {type: FilterDryer, class: filter_dryer, filter_area_m2: 4.0}
+  freiburg:
+    name: Freiburg
+    location: Freiburg, Germany
+    role: Oral solid dose
+    areas:
+      osd:
+        name: Oral solid dose
+        lines:
+          line-1:
+            name: Line 1
+            process: osd
+            units:
+              BL-301: {type: BinBlender, class: blender, working_volume_l: 600}
+              RC-302: {type: RollerCompactor, class: roller_compactor, roll_width_cm: 10}
+              TP-303: {type: RotaryTabletPress, class: tablet_press, stations: 36}
 
-equipment_modules:
-  EM-THERMAL: {name: Jacket temperature, control_modules: [TIC-101, TI-199]}
-  EM-PH: {name: pH control, control_modules: [AIC-102, FIC-108, FQI-109]}
-  EM-AERATION: {name: Aeration and agitation, control_modules: [AIC-103, SIC-104, FIC-106, FIC-107, PIC-110]}
-  EM-FEED: {name: Feed addition, control_modules: [FQI-105, WIT-111]}
+equipment_classes:
+  bioreactor:
+    equipment_modules:
+      EM-THERMAL: {name: Jacket temperature, control_modules: [TIC-101, TI-199]}
+      EM-PH: {name: pH control, control_modules: [AIC-102, FIC-108, FQI-109]}
+      EM-AERATION: {name: Aeration and agitation, control_modules: [AIC-103, SIC-104, FIC-106, FIC-107, PIC-110]}
+      EM-FEED: {name: Feed addition, control_modules: [FQI-105, WIT-111]}
+    sensors:
+      - {id: TEMP-RTD, model: Endress+Hauser TR10, control_module: TIC-101, calibration_interval_days: 180}
+      - {id: PH-PROBE, model: Mettler Toledo InPro 3253i, control_module: AIC-102, calibration_interval_days: 30}
+      - {id: DO-PROBE, model: Hamilton VisiFerm DO Arc, control_module: AIC-103, calibration_interval_days: 90}
+      - {id: PRESSURE-TX, model: Rosemount 3051, control_module: PIC-110, calibration_interval_days: 365}
+      - {id: LOAD-CELL, model: Mettler Toledo SWB805, control_module: WIT-111, calibration_interval_days: 365}
+    # Phase classes are written against aliases; each unit resolves an alias to one of its
+    # own modules (an equipment module or a control module). `role` says whether the
+    # phase drives the loop (control) or only reads it (monitor).
+    phase_classes:
+      TEMP_CTRL:
+        - {alias: "#THERMAL#", module: EM-THERMAL, role: control}
+      PH_CTRL:
+        - {alias: "#PH_LOOP#", module: EM-PH, role: control}
+        - {alias: "#TEMP_COMP#", module: TIC-101, role: monitor}  # pH is temperature-compensated
+      DO_CTRL:
+        - {alias: "#AERATION#", module: EM-AERATION, role: control}
+      FEED_ADD:
+        - {alias: "#FEED_PUMP#", module: EM-FEED, role: control}
+        - {alias: "#PH_CHECK#", module: AIC-102, role: monitor}  # a bolus checks pH first
 
-sensors:
-  - {id: TEMP-RTD, model: Endress+Hauser TR10, control_module: TIC-101, calibration_interval_days: 180}
-  - {id: PH-PROBE, model: Mettler Toledo InPro 3253i, control_module: AIC-102, calibration_interval_days: 30}
-  - {id: DO-PROBE, model: Hamilton VisiFerm DO Arc, control_module: AIC-103, calibration_interval_days: 90}
-  - {id: PRESSURE-TX, model: Rosemount 3051, control_module: PIC-110, calibration_interval_days: 365}
-  - {id: LOAD-CELL, model: Mettler Toledo SWB805, control_module: WIT-111, calibration_interval_days: 365}
+  reactor:
+    equipment_modules:
+      EM-THERMAL: {name: Reactor temperature, control_modules: [TIC-201, TI-202]}
+      EM-AGITATOR: {name: Agitator, control_modules: [SIC-203, JI-204]}
+      EM-DOSING: {name: Acetic anhydride dosing, control_modules: [FIC-205, FQI-206]}
+      EM-VESSEL: {name: Vessel pressure and level, control_modules: [PIC-207, LI-208]}
+      EM-PAT: {name: In-line PAT, control_modules: [AI-209, AI-210]}
+    sensors:
+      - {id: TEMP-RTD, model: Endress+Hauser TR10, control_module: TIC-201, calibration_interval_days: 180}
+      - {id: DOSE-CORIOLIS, model: Endress+Hauser Promass F 300, control_module: FIC-205, calibration_interval_days: 365}
+      - {id: RAMAN-PROBE, model: Endress+Hauser Raman Rxn-10, control_module: AI-209, calibration_interval_days: 90}
+      - {id: FBRM-PROBE, model: Mettler Toledo ParticleTrack G400, control_module: AI-210, calibration_interval_days: 180}
+      - {id: PRESSURE-TX, model: Rosemount 3051, control_module: PIC-207, calibration_interval_days: 365}
+    phase_classes:
+      TEMP_CTRL:
+        - {alias: "#THERMAL#", module: EM-THERMAL, role: control}
+      AGIT_CTRL:
+        - {alias: "#AGITATOR#", module: EM-AGITATOR, role: control}
+      DOSE_ADD:
+        - {alias: "#DOSING#", module: EM-DOSING, role: control}
+        - {alias: "#EXOTHERM#", module: TIC-201, role: monitor}  # dosing watches the exotherm
 
-# Phase classes are written against aliases; each unit resolves an alias to one of its
-# own modules (an equipment module or a control module). `role` says whether the phase
-# drives the loop (control) or only reads it (monitor).
-phase_classes:
-  TEMP_CTRL:
-    - {alias: "#THERMAL#", module: EM-THERMAL, role: control}
-  PH_CTRL:
-    - {alias: "#PH_LOOP#", module: EM-PH, role: control}
-    - {alias: "#TEMP_COMP#", module: TIC-101, role: monitor}  # pH is temperature-compensated
-  DO_CTRL:
-    - {alias: "#AERATION#", module: EM-AERATION, role: control}
-  FEED_ADD:
-    - {alias: "#FEED_PUMP#", module: EM-FEED, role: control}
-    - {alias: "#PH_CHECK#", module: AIC-102, role: monitor}  # a bolus checks pH first
+  filter_dryer:
+    equipment_modules:
+      EM-FILTER: {name: Pressure filtration, control_modules: [PIC-211, FI-212, FQI-213]}
+      EM-THERMAL: {name: Jacket and cake temperature, control_modules: [TIC-214, TI-215]}
+      EM-VACUUM: {name: Vacuum drying, control_modules: [PIC-216]}
+      EM-AGITATOR: {name: Smoothing agitator, control_modules: [SIC-217]}
+      EM-PAT: {name: In-line NIR, control_modules: [AI-218]}
+    sensors:
+      - {id: VACUUM-TX, model: Endress+Hauser Cerabar PMC71, control_module: PIC-216, calibration_interval_days: 365}
+      - {id: CAKE-RTD, model: Endress+Hauser TR10, control_module: TI-215, calibration_interval_days: 180}
+      - {id: NIR-PROBE, model: Thermo Fisher Antaris MX, control_module: AI-218, calibration_interval_days: 90}
+      - {id: FILTRATE-FLOW, model: Endress+Hauser Promag H 300, control_module: FI-212, calibration_interval_days: 365}
+    phase_classes:
+      FILTER_CTRL:
+        - {alias: "#FILTER#", module: EM-FILTER, role: control}
+      TEMP_CTRL:
+        - {alias: "#THERMAL#", module: EM-THERMAL, role: control}
+      VAC_CTRL:
+        - {alias: "#VACUUM#", module: EM-VACUUM, role: control}
+        - {alias: "#DRYNESS#", module: AI-218, role: monitor}  # drying ends on NIR moisture
+      AGIT_CTRL:
+        - {alias: "#AGITATOR#", module: EM-AGITATOR, role: control}
+
+  blender:
+    equipment_modules:
+      EM-DRIVE: {name: Blender drive, control_modules: [SIC-301, NQI-302]}
+      EM-PAT: {name: NIR blend monitor, control_modules: [AI-303]}
+      EM-ROOM: {name: Room environment, control_modules: [MI-304]}
+    sensors:
+      - {id: NIR-BLEND, model: Viavi MicroNIR PAT-W, control_module: AI-303, calibration_interval_days: 90}
+      - {id: RH-TX, model: Vaisala HMT330, control_module: MI-304, calibration_interval_days: 365}
+    phase_classes:
+      BLEND_CTRL:
+        - {alias: "#DRIVE#", module: EM-DRIVE, role: control}
+        - {alias: "#BLEND_NIR#", module: AI-303, role: monitor}  # blending ends on NIR uniformity
+
+  roller_compactor:
+    equipment_modules:
+      EM-ROLLS: {name: Compaction rolls, control_modules: [PIC-311, GIC-312, SIC-313]}
+      EM-FEED: {name: Feed screw, control_modules: [SIC-314]}
+      EM-MILL: {name: Granulator mill, control_modules: [SIC-315]}
+      EM-PAT: {name: Ribbon and granule monitoring, control_modules: [AI-316, WIT-317]}
+      EM-ROOM: {name: Room environment, control_modules: [MI-318]}
+    sensors:
+      - {id: FORCE-TX, model: HBM U93 force transducer, control_module: PIC-311, calibration_interval_days: 180}
+      - {id: GAP-SENSOR, model: Micro-Epsilon optoNCDT 1420, control_module: GIC-312, calibration_interval_days: 365}
+      - {id: NIR-RIBBON, model: Viavi MicroNIR PAT-U, control_module: AI-316, calibration_interval_days: 90}
+      - {id: RH-TX, model: Vaisala HMT330, control_module: MI-318, calibration_interval_days: 365}
+    phase_classes:
+      COMPACT_CTRL:
+        - {alias: "#ROLLS#", module: EM-ROLLS, role: control}
+        - {alias: "#FEED_SCREW#", module: EM-FEED, role: control}
+        - {alias: "#RIBBON#", module: AI-316, role: monitor}
+      MILL_CTRL:
+        - {alias: "#MILL#", module: EM-MILL, role: control}
+
+  tablet_press:
+    equipment_modules:
+      EM-COMPRESSION: {name: Compression stations, control_modules: [PIC-321, PI-322, PI-325]}
+      EM-TURRET: {name: Turret drive, control_modules: [SIC-323, FQI-329]}
+      EM-FEED: {name: Feed frame, control_modules: [SIC-324]}
+      EM-CHECK: {name: Checkweigher and tester, control_modules: [WI-326, AI-327, XI-328, FQI-330]}
+      EM-ROOM: {name: Room environment, control_modules: [MI-331]}
+    sensors:
+      - {id: FORCE-GAUGE, model: Fette strain-gauge compression roller, control_module: PIC-321, calibration_interval_days: 180}
+      - {id: EJECTION-GAUGE, model: Fette ejection cam load cell, control_module: PI-325, calibration_interval_days: 180}
+      - {id: CHECKWEIGHER, model: Sartorius WZA224 in Kraemer UTS, control_module: WI-326, calibration_interval_days: 90}
+      - {id: RH-TX, model: Vaisala HMT330, control_module: MI-331, calibration_interval_days: 365}
+    phase_classes:
+      TABLET_CTRL:
+        - {alias: "#COMPRESSION#", module: EM-COMPRESSION, role: control}
+        - {alias: "#TURRET#", module: EM-TURRET, role: control}
+        - {alias: "#CHECK#", module: EM-CHECK, role: monitor}
+      FEED_CTRL:
+        - {alias: "#FEED_FRAME#", module: EM-FEED, role: control}

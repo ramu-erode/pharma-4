@@ -1,6 +1,6 @@
 # ADR-0009: Simulated plant time in `ts`, wall-clock time for liveness
 
-Status: Accepted
+Status: Accepted; amended by ADR-0018
 Date: 2026-09-23
 Amends: ADR-0001 (consequences), ADR-0005 (deadband floor)
 

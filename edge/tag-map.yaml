@@ -2,25 +2,95 @@
 # (ADR-0005). Authored independently of simulator/dcs_tags.yaml; the coverage test in
 # tests/edge/test_tag_map.py keeps the two honest.
 #
-# UNS prefix comes from the device: BR101 -> pharmaco/<site>/<area>/<line>/BR-101.
+# Each commissioned device names its equipment class; the tags of a class apply to every
+# device of that class (ADR-0018). The UNS prefix comes from the plant model:
+# RX201 -> pharmanextgen/tuas/api/train-1/RX-201.
 # deadband: publish when |value - last published| > deadband, or when the floor
 # interval (DEADBAND_FLOOR_S, simulated seconds) has passed (ADR-0009).
 devices:
-  BR101: BR-101
-  BR102: BR-102
+  BR101: {cell: BR-101, class: bioreactor}
+  BR102: {cell: BR-102, class: bioreactor}
+  RX201: {cell: RX-201, class: reactor}
+  FD202: {cell: FD-202, class: filter_dryer}
+  BL301: {cell: BL-301, class: blender}
+  RC302: {cell: RC-302, class: roller_compactor}
+  TP303: {cell: TP-303, class: tablet_press}
 
-tags:
-  TIC-101.PV: {class: pv, name: temperature, unit: "°C", deadband: 0.05}
-  TIC-101.SP: {class: sp, name: temperature, unit: "°C", deadband: 0.001}
-  AIC-102.PV: {class: pv, name: ph, unit: pH, deadband: 0.01}
-  AIC-102.SP: {class: sp, name: ph, unit: pH, deadband: 0.001}
-  AIC-103.PV: {class: pv, name: do, unit: "% air sat.", deadband: 0.5}
-  AIC-103.SP: {class: sp, name: do, unit: "% air sat.", deadband: 0.001}
-  SIC-104.PV: {class: pv, name: agitation, unit: rpm, deadband: 1.0}
-  FQI-105.PV: {class: pv, name: feed_total, unit: L, deadband: 0.5}
-  FIC-106.PV: {class: pv, name: air_flow, unit: L/min, deadband: 0.02}
-  FIC-107.PV: {class: pv, name: o2_flow, unit: L/min, deadband: 0.02}
-  FIC-108.PV: {class: pv, name: co2_flow, unit: L/min, deadband: 0.01}
-  FQI-109.PV: {class: pv, name: base_total, unit: mL, deadband: 10.0}
-  PIC-110.PV: {class: pv, name: pressure, unit: mbar, deadband: 1.0}
-  WIT-111.PV: {class: pv, name: weight, unit: kg, deadband: 2.0}
+classes:
+  bioreactor:
+    TIC-101.PV: {class: pv, name: temperature, unit: "°C", deadband: 0.05}
+    TIC-101.SP: {class: sp, name: temperature, unit: "°C", deadband: 0.001}
+    AIC-102.PV: {class: pv, name: ph, unit: pH, deadband: 0.01}
+    AIC-102.SP: {class: sp, name: ph, unit: pH, deadband: 0.001}
+    AIC-103.PV: {class: pv, name: do, unit: "% air sat.", deadband: 0.5}
+    AIC-103.SP: {class: sp, name: do, unit: "% air sat.", deadband: 0.001}
+    SIC-104.PV: {class: pv, name: agitation, unit: rpm, deadband: 1.0}
+    FQI-105.PV: {class: pv, name: feed_total, unit: L, deadband: 0.5}
+    FIC-106.PV: {class: pv, name: air_flow, unit: L/min, deadband: 0.02}
+    FIC-107.PV: {class: pv, name: o2_flow, unit: L/min, deadband: 0.02}
+    FIC-108.PV: {class: pv, name: co2_flow, unit: L/min, deadband: 0.01}
+    FQI-109.PV: {class: pv, name: base_total, unit: mL, deadband: 10.0}
+    PIC-110.PV: {class: pv, name: pressure, unit: mbar, deadband: 1.0}
+    WIT-111.PV: {class: pv, name: weight, unit: kg, deadband: 2.0}
+
+  reactor:
+    TIC-201.PV: {class: pv, name: temperature, unit: "°C", deadband: 0.05}
+    TIC-201.SP: {class: sp, name: temperature, unit: "°C", deadband: 0.001}
+    TI-202.PV: {class: pv, name: jacket_temperature, unit: "°C", deadband: 0.1}
+    SIC-203.PV: {class: pv, name: agitation, unit: rpm, deadband: 0.5}
+    SIC-203.SP: {class: sp, name: agitation, unit: rpm, deadband: 0.001}
+    JI-204.PV: {class: pv, name: agitator_power, unit: kW, deadband: 0.05}
+    FIC-205.PV: {class: pv, name: dose_flow, unit: kg/h, deadband: 2.0}
+    FIC-205.SP: {class: sp, name: dose_flow, unit: kg/h, deadband: 0.001}
+    FQI-206.PV: {class: pv, name: dose_total, unit: kg, deadband: 1.0}
+    PIC-207.PV: {class: pv, name: pressure, unit: mbar, deadband: 1.0}
+    LI-208.PV: {class: pv, name: level, unit: "%", deadband: 0.2}
+    AI-209.PV: {class: pv, name: conversion, unit: "%", deadband: 0.2}
+    AI-210.PV: {class: pv, name: chord_length, unit: µm, deadband: 1.0}
+
+  filter_dryer:
+    PIC-211.PV: {class: pv, name: filter_pressure, unit: barg, deadband: 0.01}
+    PIC-211.SP: {class: sp, name: filter_pressure, unit: barg, deadband: 0.001}
+    FI-212.PV: {class: pv, name: filtrate_flow, unit: L/min, deadband: 0.2}
+    FQI-213.PV: {class: pv, name: filtrate_total, unit: L, deadband: 2.0}
+    TIC-214.PV: {class: pv, name: jacket_temperature, unit: "°C", deadband: 0.1}
+    TIC-214.SP: {class: sp, name: jacket_temperature, unit: "°C", deadband: 0.001}
+    TI-215.PV: {class: pv, name: cake_temperature, unit: "°C", deadband: 0.1}
+    PIC-216.PV: {class: pv, name: vacuum, unit: mbar, deadband: 1.0}
+    PIC-216.SP: {class: sp, name: vacuum, unit: mbar, deadband: 0.001}
+    SIC-217.PV: {class: pv, name: agitation, unit: rpm, deadband: 0.2}
+    AI-218.PV: {class: pv, name: moisture, unit: "% w/w", deadband: 0.05}
+
+  blender:
+    SIC-301.PV: {class: pv, name: speed, unit: rpm, deadband: 0.2}
+    SIC-301.SP: {class: sp, name: speed, unit: rpm, deadband: 0.001}
+    NQI-302.PV: {class: pv, name: revolutions, unit: rev, deadband: 5.0}
+    AI-303.PV: {class: pv, name: blend_rsd, unit: "%", deadband: 0.1}
+    MI-304.PV: {class: pv, name: room_rh, unit: "% RH", deadband: 0.2}
+
+  roller_compactor:
+    PIC-311.PV: {class: pv, name: roll_force, unit: kN/cm, deadband: 0.05}
+    PIC-311.SP: {class: sp, name: roll_force, unit: kN/cm, deadband: 0.001}
+    GIC-312.PV: {class: pv, name: roll_gap, unit: mm, deadband: 0.02}
+    SIC-313.PV: {class: pv, name: roll_speed, unit: rpm, deadband: 0.1}
+    SIC-314.PV: {class: pv, name: screw_speed, unit: rpm, deadband: 0.5}
+    SIC-315.PV: {class: pv, name: mill_speed, unit: rpm, deadband: 5.0}
+    AI-316.PV: {class: pv, name: ribbon_density, unit: g/cm³, deadband: 0.005}
+    WIT-317.PV: {class: pv, name: granule_mass, unit: kg, deadband: 1.0}
+    MI-318.PV: {class: pv, name: room_rh, unit: "% RH", deadband: 0.2}
+
+  tablet_press:
+    PIC-321.PV: {class: pv, name: comp_force, unit: kN, deadband: 0.1}
+    PIC-321.SP: {class: sp, name: comp_force, unit: kN, deadband: 0.001}
+    PI-322.PV: {class: pv, name: precomp_force, unit: kN, deadband: 0.05}
+    SIC-323.PV: {class: pv, name: turret_speed, unit: rpm, deadband: 0.2}
+    SIC-323.SP: {class: sp, name: turret_speed, unit: rpm, deadband: 0.001}
+    SIC-324.PV: {class: pv, name: feed_frame, unit: rpm, deadband: 0.2}
+    SIC-324.SP: {class: sp, name: feed_frame, unit: rpm, deadband: 0.001}
+    PI-325.PV: {class: pv, name: ejection_force, unit: N, deadband: 5.0}
+    WI-326.PV: {class: pv, name: tablet_weight, unit: mg, deadband: 0.5}
+    AI-327.PV: {class: pv, name: weight_rsd, unit: "%", deadband: 0.05}
+    XI-328.PV: {class: pv, name: hardness, unit: kN, deadband: 0.05}
+    FQI-329.PV: {class: pv, name: tablets_total, unit: k tablets, deadband: 5.0}
+    FQI-330.PV: {class: pv, name: rejects_total, unit: k tablets, deadband: 0.2}
+    MI-331.PV: {class: pv, name: room_rh, unit: "% RH", deadband: 0.2}

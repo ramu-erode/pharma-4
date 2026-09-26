@@ -1,22 +1,21 @@
-"""Load configuration into the graph: plant hierarchy, modules, bindings, tags, recipes.
+"""Load configuration into the graph: enterprise, sites, lines, units, modules, bindings,
+tags, recipes (ADR-0011, ADR-0018).
 
-Everything here is configuration (ADR-0011): `config/plant.yaml`, `graph/recipes/*.yaml`
-and the edge tag map (the same facts the edge adapter publishes on `_meta/tags`).
-Statements are MERGEs, so loading twice changes nothing.
+Everything here is configuration: `config/plant.yaml` (through `common.plant`),
+`graph/recipes/*.yaml` and the edge tag map (the same facts the edge adapter publishes
+on `_meta/tags`). Statements are MERGEs, so loading twice changes nothing.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
-from common.uns import TopicClass, UnitPath
+from common.plant import Plant, get_plant
+from common.uns import TopicClass
 from edge.core import TagMap
 from graph.core import Stmt, cm_of_raw_tag, tag_statement
 from simulator import recipes
 
-PLANT_FILE = Path(__file__).resolve().parents[1] / "config" / "plant.yaml"
 SCHEMA_FILE = Path(__file__).with_name("schema.cypher")
 
 
@@ -27,62 +26,43 @@ def schema_statements() -> list[Stmt]:
     return [(s.strip(), {}) for s in text.split(";") if s.strip()]
 
 
-def plant_statements(tag_map: TagMap, plant_file: Path = PLANT_FILE) -> list[Stmt]:
-    plant = yaml.safe_load(plant_file.read_text())
-    site, area, line = plant["site"], plant["area"], plant["line"]
+def plant_statements(tag_map: TagMap, plant: Plant | None = None) -> list[Stmt]:
+    plant = plant or get_plant()
+    ent = plant.enterprise
     out: list[Stmt] = [
-        (
-            "MERGE (s:Site {id: $site}) SET s.name = $site_name "
-            "MERGE (a:Area {id: $area}) SET a.name = $area_name "
-            "MERGE (l:Line {id: $line}) SET l.name = $line_name "
-            "MERGE (s)-[:HAS_AREA]->(a) MERGE (a)-[:HAS_LINE]->(l)",
-            {
-                "site": site["id"],
-                "site_name": site["name"],
-                "area": area["id"],
-                "area_name": area["name"],
-                "line": line["id"],
-                "line_name": line["name"],
-            },
-        )
+        ("MERGE (e:Enterprise {id: $id}) SET e.name = $name", {"id": ent.id, "name": ent.name})
     ]
-    for cell, spec in plant["units"].items():
-        path = UnitPath(site["id"], area["id"], line["id"], cell)
+    for site in plant.sites:
         out.append(
             (
-                "MATCH (l:Line {id: $line}) MERGE (u:Equipment {id: $cell}) "
-                "SET u.type = $type, u.path = $path, u.working_volume_l = $vol "
-                "MERGE (l)-[:HAS_UNIT]->(u)",
+                "MATCH (e:Enterprise {id: $ent}) MERGE (s:Site {id: $id}) "
+                "SET s.name = $name, s += $props MERGE (e)-[:HAS_SITE]->(s)",
+                {"ent": ent.id, "id": site.id, "name": site.name, "props": site.props},
+            )
+        )
+    for line in plant.lines:
+        out.append(
+            (
+                "MATCH (s:Site {id: $site}) "
+                "MERGE (a:Area {id: $area}) SET a.name = $area_name "
+                "MERGE (l:Line {id: $line}) SET l.name = $line_name, l.process = $process "
+                "MERGE (s)-[:HAS_AREA]->(a) MERGE (a)-[:HAS_LINE]->(l)",
                 {
-                    "line": line["id"],
-                    "cell": cell,
-                    "type": spec["type"],
-                    "path": path.prefix,
-                    "vol": spec["working_volume_l"],
+                    "site": line.site.id,
+                    "area": line.area.id,
+                    "area_name": line.area.name,
+                    "line": line.line.id,
+                    "line_name": line.line.name,
+                    "process": line.process,
                 },
             )
         )
-        for em_id, em in plant["equipment_modules"].items():
-            out.append(
-                (
-                    "MATCH (u:Equipment {id: $cell}) "
-                    "MERGE (em:EquipmentModule {id: $id}) SET em.name = $name, em.module = $em "
-                    "MERGE (u)-[:HAS_EM]->(em)",
-                    {"cell": cell, "id": f"{cell}/{em_id}", "name": em["name"], "em": em_id},
-                )
-            )
-            for cm in em["control_modules"]:
-                out.append(
-                    (
-                        "MATCH (em:EquipmentModule {id: $em}) "
-                        "MERGE (cm:ControlModule {id: $id}) SET cm.module = $cm "
-                        "MERGE (em)-[:HAS_CM]->(cm)",
-                        {"em": f"{cell}/{em_id}", "id": f"{cell}/{cm}", "cm": cm},
-                    )
-                )
+        for position, cell in enumerate(line.units):
+            out += _unit_statements(plant, line.line.id, cell, position)
     out += tag_statements(tag_map)
-    for cell in plant["units"]:
-        for sensor in plant["sensors"]:
+    for cell, unit in plant.units.items():
+        cls = plant.classes[unit.cls]
+        for sensor in cls["sensors"]:
             pv = [
                 e.topic
                 for e in tag_map.entries.values()
@@ -107,7 +87,7 @@ def plant_statements(tag_map: TagMap, plant_file: Path = PLANT_FILE) -> list[Stm
                     },
                 )
             )
-        for phase, bindings in plant["phase_classes"].items():
+        for phase, bindings in cls["phase_classes"].items():
             out.append(("MERGE (:PhaseClass {name: $name})", {"name": phase}))
             for bnd in bindings:
                 label = "EquipmentModule" if bnd["module"].startswith("EM-") else "ControlModule"
@@ -128,6 +108,48 @@ def plant_statements(tag_map: TagMap, plant_file: Path = PLANT_FILE) -> list[Stm
     return out
 
 
+def _unit_statements(plant: Plant, line: str, cell: str, position: int) -> list[Stmt]:
+    """A unit and its modules. `position` is its place in the line (a train's order)."""
+    unit = plant.unit(cell)
+    out: list[Stmt] = [
+        (
+            "MATCH (l:Line {id: $line}) MERGE (u:Equipment {id: $cell}) "
+            "SET u.type = $type, u.class = $cls, u.process = $process, u.path = $path, "
+            "u.position = $position, u += $props "
+            "MERGE (l)-[:HAS_UNIT]->(u)",
+            {
+                "line": line,
+                "cell": cell,
+                "type": unit.type,
+                "cls": unit.cls,
+                "process": unit.process,
+                "path": unit.path.prefix,
+                "position": position,
+                "props": unit.props,
+            },
+        )
+    ]
+    for em_id, em in plant.classes[unit.cls]["equipment_modules"].items():
+        out.append(
+            (
+                "MATCH (u:Equipment {id: $cell}) "
+                "MERGE (em:EquipmentModule {id: $id}) SET em.name = $name, em.module = $em "
+                "MERGE (u)-[:HAS_EM]->(em)",
+                {"cell": cell, "id": f"{cell}/{em_id}", "name": em["name"], "em": em_id},
+            )
+        )
+        for cm in em["control_modules"]:
+            out.append(
+                (
+                    "MATCH (em:EquipmentModule {id: $em}) "
+                    "MERGE (cm:ControlModule {id: $id}) SET cm.module = $cm "
+                    "MERGE (em)-[:HAS_CM]->(cm)",
+                    {"em": f"{cell}/{em_id}", "id": f"{cell}/{cm}", "cm": cm},
+                )
+            )
+    return out
+
+
 def tag_statements(tag_map: TagMap) -> list[Stmt]:
     """Tag nodes and their control modules: the facts `_meta/tags` carries live."""
     return [
@@ -136,19 +158,22 @@ def tag_statements(tag_map: TagMap) -> list[Stmt]:
     ]
 
 
-def recipe_statements(tag_map: TagMap) -> list[Stmt]:
+def recipe_statements(tag_map: TagMap, plant: Plant | None = None) -> list[Stmt]:
+    plant = plant or get_plant()
     out: list[Stmt] = []
-    pv_topics: dict[str, list[str]] = {}
+    pv_topics: dict[tuple[str, str], list[str]] = {}  # (process, name) -> topics
     for e in tag_map.entries.values():
         if e.cls is TopicClass.PV:
-            pv_topics.setdefault(e.name, []).append(e.topic)
+            process = plant.unit(e.unit_path.cell).process
+            pv_topics.setdefault((process, e.name), []).append(e.topic)
     for r in recipes.load_all().values():
         out.append(
             (
                 "MERGE (r:Recipe {id: $id}) SET r.name = $name, r.version = $version, "
-                "r.effective_from = date($eff), r += $nominal",
+                "r.process = $process, r.effective_from = date($eff), r += $nominal",
                 {
                     "id": r.id,
+                    "process": r.process,
                     "name": r.name,
                     "version": r.version,
                     "eff": r.effective_from.isoformat(),
@@ -179,7 +204,7 @@ def recipe_statements(tag_map: TagMap) -> list[Stmt]:
                         "MATCH (r:Recipe {id: $recipe}) "
                         "MERGE (l:SpecLimit {id: $id}) "
                         "SET l.type = $kind, l.parameter = $name, l.low = $lo, l.high = $hi, "
-                        "l.sp_relative = $rel "
+                        "l.sp_relative = $rel, l.operations = $ops "
                         "MERGE (r)-[:HAS_LIMIT]->(l) "
                         "WITH l UNWIND $topics AS topic MATCH (t:Tag {topic: topic}) "
                         "MERGE (l)-[:FOR_TAG]->(t)",
@@ -191,13 +216,15 @@ def recipe_statements(tag_map: TagMap) -> list[Stmt]:
                             "lo": lo,
                             "hi": hi,
                             "rel": limit.sp_relative,
-                            "topics": pv_topics.get(name, []),
+                            "ops": list(limit.operations) if limit.operations else None,
+                            "topics": pv_topics.get((r.process, name), []),
                         },
                     )
                 )
     return out
 
 
-def config_statements(site: str, area: str, line: str) -> list[Stmt]:
-    tag_map = TagMap.load(site, area, line)
-    return plant_statements(tag_map) + recipe_statements(tag_map)
+def config_statements(plant: Plant | None = None) -> list[Stmt]:
+    plant = plant or get_plant()
+    tag_map = TagMap.load(plant)
+    return plant_statements(tag_map, plant) + recipe_statements(tag_map, plant)

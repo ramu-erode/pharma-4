@@ -6,55 +6,63 @@
 
 user simulator
 topic write edge/raw/#
-topic write pharmaco/+/+/+/+/lab/#
-topic readwrite pharmaco/+/+/+/+/state/#
-topic write pharmaco/+/+/+/+/events/#
+topic write pharmanextgen/+/+/+/+/lab/#
+topic readwrite pharmanextgen/+/+/+/+/state/#
+topic write pharmanextgen/+/+/+/+/events/#
 topic readwrite _sim/clock
 topic write _sim/faults/#
 topic read _sim/cmd/#
-topic write pharmaco/_meta/simulator/#
+# Freiburg's API stock (ADR-0020): its own, and the stock bootstrap hands over.
+topic readwrite _sim/inventory
+topic read _sim/opening_stock
+topic write pharmanextgen/_meta/simulator/#
+
+# One-shot first start: hands the backfilled stock to the simulator (ADR-0020).
+user bootstrap
+topic write _sim/opening_stock
 
 user edge-adapter
 topic read edge/raw/#
-topic read pharmaco/+/+/+/+/state/batch
-topic write pharmaco/+/+/+/+/pv/#
-topic write pharmaco/+/+/+/+/sp/#
+topic read pharmanextgen/+/+/+/+/state/batch
+topic write pharmanextgen/+/+/+/+/pv/#
+topic write pharmanextgen/+/+/+/+/sp/#
 topic write edge/unmapped
-topic write pharmaco/_meta/tags/#
-topic write pharmaco/_meta/edge-adapter/#
+topic write pharmanextgen/_meta/tags/#
+topic write pharmanextgen/_meta/edge-adapter/#
 
 user historian
-topic read pharmaco/#
+topic read pharmanextgen/#
 topic read _sim/faults/#
-topic write pharmaco/_meta/historian/#
+topic write pharmanextgen/_meta/historian/#
 
 user graph-sync
-topic read pharmaco/#
+topic read pharmanextgen/#
 topic read _sim/faults/#
-topic write pharmaco/_meta/graph-sync/#
+topic write pharmanextgen/_meta/graph-sync/#
 
 user anomaly
-topic read pharmaco/#
-topic write pharmaco/+/+/+/+/ai/anomaly/#
-topic write pharmaco/_meta/anomaly/#
+topic read pharmanextgen/#
+topic write pharmanextgen/+/+/+/+/ai/anomaly/#
+topic write pharmanextgen/_meta/anomaly/#
 
 user yield
-topic read pharmaco/#
-topic write pharmaco/+/+/+/+/ai/yield/#
-topic write pharmaco/_meta/yield/#
+topic read pharmanextgen/#
+topic write pharmanextgen/+/+/+/+/ai/yield/#
+topic write pharmanextgen/_meta/yield/#
 
 user dashboard
-topic read pharmaco/#
+topic read pharmanextgen/#
 topic read edge/#
 topic read _sim/clock
 topic read _sim/faults/#
+topic read _sim/inventory
 topic write _sim/cmd/#
-topic write pharmaco/_meta/dashboard/#
+topic write pharmanextgen/_meta/dashboard/#
 
 # The i3X read API (ADR-0016). Anything it serves an LLM may see, so no `_sim/#`.
 user i3x
-topic read pharmaco/#
-topic write pharmaco/_meta/i3x/#
+topic read pharmanextgen/#
+topic write pharmanextgen/_meta/i3x/#
 
 # Compose healthcheck only.
 user healthcheck

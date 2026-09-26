@@ -42,26 +42,39 @@ class ResponseSurface:
     coef: np.ndarray  # (BOOTSTRAPS, n_terms): one surface per bootstrap refit
     full: np.ndarray  # (n_terms,): the fit on every run
     runs: int
+    levers: tuple[str, ...] = LEVERS  # the process's levers, in column order (ADR-0021)
+    # "loss": the surface is fitted to ln(100 - y), for a yield in % whose losses compound
+    # multiplicatively (tablet rejects); predictions come back on the yield scale.
+    transform: str = "identity"
 
     def code(self, levers: np.ndarray) -> np.ndarray:
-        lo = np.array([self.par[k][0] for k in LEVERS])
-        hi = np.array([self.par[k][1] for k in LEVERS])
+        lo = np.array([self.par[k][0] for k in self.levers])
+        hi = np.array([self.par[k][1] for k in self.levers])
         return (np.atleast_2d(levers) - (lo + hi) / 2) / ((hi - lo) / 2)
 
     def predict(self, levers: np.ndarray, which: slice = slice(None)) -> np.ndarray:
-        """Shape (n_bootstraps, n_points): final titer per bootstrap surface."""
-        return self.coef[which] @ quadratic(self.code(levers)).T
+        """Shape (n_bootstraps, n_points): the final target per bootstrap surface."""
+        z = self.coef[which] @ quadratic(self.code(levers)).T
+        return 100.0 - np.exp(z) if self.transform == "loss" else z
 
 
 def fit_surface(
-    levers: np.ndarray, titer: np.ndarray, par: dict[str, tuple[float, float]], seed: int
+    levers: np.ndarray,
+    titer: np.ndarray,
+    par: dict[str, tuple[float, float]],
+    seed: int,
+    names: tuple[str, ...] = LEVERS,
+    transform: str = "identity",
 ) -> ResponseSurface:
+    """Fit to the target (`titer` for the bioreactor; a yield for the other processes)."""
     if len(titer) < MIN_RUNS:
         # Fewer runs than about the number of quadratic terms and every bootstrap refit
         # overfits the same way: they agree, confidently, on a wrong gain.
         raise ValueError(f"{len(titer)} DoE runs; a response surface needs at least {MIN_RUNS}")
-    empty = ResponseSurface(par, np.zeros((1, 1)), np.zeros(1), len(titer))
+    empty = ResponseSurface(par, np.zeros((1, 1)), np.zeros(1), len(titer), names)
     X = quadratic(empty.code(levers))
+    if transform == "loss":
+        titer = np.log(np.maximum(100.0 - titer, 1e-3))
 
     def one(rows: np.ndarray) -> np.ndarray:
         m = HuberRegressor(alpha=ALPHA, max_iter=5000, fit_intercept=False)
@@ -70,7 +83,7 @@ def fit_surface(
     rng = np.random.default_rng(seed)
     n = len(titer)
     coef = np.stack([one(rng.integers(0, n, n)) for _ in range(BOOTSTRAPS)])
-    return ResponseSurface(par, coef, one(np.arange(n)), n)
+    return ResponseSurface(par, coef, one(np.arange(n)), n, names, transform)
 
 
 def exposure(lever: str, day: float, shift_day: float) -> float:

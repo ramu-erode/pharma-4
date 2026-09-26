@@ -7,6 +7,7 @@ import pytest
 
 from common.models import Campaign, FaultType
 from simulator import campaign, recipes
+from simulator.processes import FAULTS
 from simulator.recipes import LEVER_NAMES
 
 END = datetime(2026, 9, 23, 13, 0, tzinfo=UTC)
@@ -64,7 +65,7 @@ def test_fault_mix():
     faulty = [s for s in PLAN.specs if s.faults]
     assert len(faulty) == 30
     kinds = Counter(s.faults[0].kind for s in faulty)
-    assert set(kinds) == set(FaultType)
+    assert set(kinds) == set(FAULTS["bioreactor"])
     assert kinds[FaultType.CONTAMINATION] <= 3
     for s in faulty:
         f = s.faults[0]

@@ -159,3 +159,17 @@ def test_measured_titer_is_zero_before_the_first_sample():
     assert measured(x)[0] == 0.0
     x[FEATURES.index("titer_so_far")] = 2.5
     assert measured(x)[0] == 2.5
+
+
+def test_a_loss_surface_fits_multiplicative_losses_on_the_yield_scale():
+    """Tablet rejects compound: fitted to ln(100 - yield), a quadratic recovers them and
+    answers on the yield scale (ADR-0021)."""
+    rng = np.random.default_rng(0)
+    L = np.stack([rng.uniform(*PAR[k], 60) for k in LEVERS], axis=1)
+    loss = np.exp(0.5 + 0.8 * (L[:, 1] - 33.5) ** 2)  # losses explode away from 33.5
+    surface = fit_surface(L, 100 - loss, PAR, 0, transform="loss")
+    near, far = L[:1].copy(), L[:1].copy()
+    near[0, 1], far[0, 1] = 33.5, 35.0
+    pred = surface.predict(np.vstack([near, far])).mean(axis=0)
+    assert pred[0] == pytest.approx(100 - np.exp(0.5), abs=0.3)
+    assert pred[1] < pred[0] - 3

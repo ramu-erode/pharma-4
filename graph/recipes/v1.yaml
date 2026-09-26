@@ -1,6 +1,7 @@
 # Recipe v1: the original tech-transfer process (2022-2023).
 # Read by the simulator (nominal levers, jitter) and graph-sync (PARs, spec limits).
 id: v1
+process: bioreactor
 name: CHO-mAb fed-batch
 version: 1
 effective_from: 2022-01-01

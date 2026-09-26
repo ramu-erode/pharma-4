@@ -23,9 +23,14 @@ from ai.yield_.rsm import ResponseSurface
 _TITER = FEATURES.index("titer_so_far")
 
 
-def measured(X: np.ndarray) -> np.ndarray:
-    """The titer already measured in each row (0 before the first titer sample)."""
-    return np.nan_to_num(np.atleast_2d(X)[:, _TITER])
+def measured(X: np.ndarray, column: int | None = _TITER) -> np.ndarray:
+    """What is already measured of the target in each row: the bioreactor's titer so far
+    (0 before the first sample). Processes whose target is only known at the end have
+    no such column and predict the final value directly (ADR-0021)."""
+    X = np.atleast_2d(X)
+    if column is None:
+        return np.zeros(len(X))
+    return np.nan_to_num(X[:, column])
 
 
 MEMBERS = 20
@@ -55,18 +60,23 @@ class YieldModel:
     surface: ResponseSurface | None = None  # lever effects from the DoE (ADR-0015)
     band_scale: float = 1.0  # stretches the P10/P90 half-widths to their nominal coverage
     features: tuple[str, ...] = FEATURES
+    process: str = "bioreactor"
+    measured_column: int | None = _TITER
+
+    def measured(self, X: np.ndarray) -> np.ndarray:
+        return measured(X, self.measured_column)
 
     def member_predictions(self, X: np.ndarray) -> np.ndarray:
-        """Shape (MEMBERS, n): each member's titer prediction."""
+        """Shape (MEMBERS, n): each member's prediction of the target."""
         X = np.atleast_2d(X)
-        return np.stack([b.predict(X) for b in self.members]) + measured(X)
+        return np.stack([b.predict(X) for b in self.members]) + self.measured(X)
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return self.member_predictions(X).mean(axis=0)
 
     def band(self, X: np.ndarray) -> dict[float, np.ndarray]:
         X = np.atleast_2d(X)
-        out = {q: b.predict(X) + measured(X) for q, b in self.quantiles.items()}
+        out = {q: b.predict(X) + self.measured(X) for q, b in self.quantiles.items()}
         mid = out[0.5]
         lo = mid - self.band_scale * np.maximum(mid - out[0.1], 0.0)  # quantile models can
         hi = mid + self.band_scale * np.maximum(out[0.9] - mid, 0.0)  # cross; keep ordered
@@ -74,42 +84,60 @@ class YieldModel:
 
     def pls_predict(self, X: np.ndarray) -> np.ndarray:
         filled = np.where(np.isnan(X), self.pls_fill, X)
-        return self.pls.predict(filled).ravel() + measured(X)
+        return self.pls.predict(filled).ravel() + self.measured(X)
 
 
-def _booster(X: np.ndarray, y: np.ndarray, seed: int, **extra) -> lgb.Booster:
+def _booster(
+    X: np.ndarray, y: np.ndarray, seed: int, features: tuple[str, ...] = FEATURES, **extra
+) -> lgb.Booster:
     params = {**PARAMS, "seed": seed, **extra}
-    return lgb.train(params, lgb.Dataset(X, y, feature_name=list(FEATURES)), ROUNDS)
+    return lgb.train(params, lgb.Dataset(X, y, feature_name=list(features)), ROUNDS)
 
 
-def fit(X: np.ndarray, y: np.ndarray, groups: np.ndarray, seed: int, version: str) -> YieldModel:
+def fit(
+    X: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    seed: int,
+    version: str,
+    features: tuple[str, ...] = FEATURES,
+    process: str = "bioreactor",
+    measured_column: int | None = _TITER,
+) -> YieldModel:
     """`groups` = batch index per row; bootstrap resamples whole batches."""
     rng = np.random.default_rng(seed)
     batches = np.unique(groups)
-    y = y - measured(X)  # remaining gain
+    y = y - measured(X, measured_column)  # remaining gain (all of it, with no column)
     members = []
     for i in range(MEMBERS):
         pick = rng.choice(batches, size=len(batches), replace=True)
         rows = np.concatenate([np.nonzero(groups == b)[0] for b in pick])
-        members.append(_booster(X[rows], y[rows], seed + i))
+        members.append(_booster(X[rows], y[rows], seed + i, features))
     # Coarser trees for the quantiles: fine ones fit the training rows' own noise and give
     # a band far narrower than the real spread (measured: 44% P10-P90 coverage).
     coarse = {"num_leaves": 7, "min_data_in_leaf": 80, "learning_rate": 0.03}
     quantiles = {
-        q: _booster(X, y, seed, objective="quantile", alpha=q, **coarse) for q in QUANTILES
+        q: _booster(X, y, seed, features, objective="quantile", alpha=q, **coarse)
+        for q in QUANTILES
     }
     fill = np.nanmean(X, axis=0)
     pls = PLSRegression(n_components=5).fit(np.where(np.isnan(X), fill, X), y)
-    contrib = quantiles[0.5].predict(X, pred_contrib=True)[:, : len(FEATURES)]
-    importance = dict(zip(FEATURES, np.abs(contrib).mean(axis=0).tolist(), strict=True))
-    return YieldModel(version, members, quantiles, pls, fill, importance)
+    contrib = quantiles[0.5].predict(X, pred_contrib=True)[:, : len(features)]
+    importance = dict(zip(features, np.abs(contrib).mean(axis=0).tolist(), strict=True))
+    return YieldModel(
+        version, members, quantiles, pls, fill, importance,
+        features=features, process=process, measured_column=measured_column,
+    )  # fmt: skip
 
 
 MODEL_REVISION = "y3"  # bump when the modelling changes (y3: DoE response surface, ADR-0015)
 
 
-def version_for(batch_ids: list[str], seed: int) -> str:
-    h = hashlib.sha256(f"{MODEL_REVISION}:{seed}:{','.join(FEATURES)}".encode())
+def version_for(
+    batch_ids: list[str], seed: int, process: str = "bioreactor", features=FEATURES
+) -> str:
+    tag = "" if process == "bioreactor" else f"{process}:"  # the bioreactor's is unchanged
+    h = hashlib.sha256(f"{MODEL_REVISION}:{tag}{seed}:{','.join(features)}".encode())
     for b in sorted(batch_ids):
         h.update(b.encode())
     return "yield-" + h.hexdigest()[:12]

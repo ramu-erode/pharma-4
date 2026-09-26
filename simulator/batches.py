@@ -33,12 +33,15 @@ LAB_OFFSET_H = 1.0  # daily sample time after each batch-day boundary
 EARLY_HARVEST_VIABILITY = 60.0
 ABORT_CONTAMINANT = 30.0
 
+# The bioreactor's phase classes (the other processes' phases are theirs, ADR-0019).
+BIO_PHASES = (PhaseClass.TEMP_CTRL, PhaseClass.PH_CTRL, PhaseClass.DO_CTRL, PhaseClass.FEED_ADD)
+
 PHASES: dict[Operation, tuple[PhaseClass, ...]] = {
     Operation.SETUP: (PhaseClass.TEMP_CTRL, PhaseClass.PH_CTRL, PhaseClass.DO_CTRL),
     Operation.INOCULATION: (PhaseClass.TEMP_CTRL, PhaseClass.PH_CTRL, PhaseClass.DO_CTRL),
-    Operation.GROWTH: tuple(PhaseClass),
-    Operation.TEMP_SHIFT: tuple(PhaseClass),
-    Operation.PRODUCTION: tuple(PhaseClass),
+    Operation.GROWTH: BIO_PHASES,
+    Operation.TEMP_SHIFT: BIO_PHASES,
+    Operation.PRODUCTION: BIO_PHASES,
     Operation.HARVEST: (PhaseClass.TEMP_CTRL,),
 }
 

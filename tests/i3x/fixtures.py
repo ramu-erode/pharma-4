@@ -1,4 +1,6 @@
-"""A small hand-built plant for i3X and assistant tests: one bioreactor, two batches."""
+"""A small hand-built plant for i3X and assistant tests: one bioreactor with two batches,
+and one API reactor whose batch made a lot the bioreactor's second batch drew on (the
+genealogy shape, not a real route)."""
 
 from __future__ import annotations
 
@@ -12,7 +14,10 @@ from i3x.api import Backend, create_app
 from i3x.space import AddressSpace, Catalog, build
 from i3x.subscriptions import Hub
 
-UNIT = uns.UnitPath("chennai", "upstream", "suite-1", "BR-101")
+UNIT = uns.UnitPath("grange-castle", "upstream", "suite-1", "BR-101")
+RX = uns.UnitPath("tuas", "api", "train-1", "RX-201")
+API_LEVERS = {"rxn_temp": 85.0, "ac2o_ratio": 1.25, "rxn_time": 3.0, "cool_rate": 10.0,
+              "dry_temp": 50.0}  # fmt: skip
 PV_PH = uns.pv(UNIT, "ph")
 SP_PH = uns.sp(UNIT, "ph")
 PV_TEMP = uns.pv(UNIT, "temperature")
@@ -40,10 +45,48 @@ def catalog() -> Catalog:
         {"name": "Setup", "start": T0, "end": T0 + timedelta(hours=6), "phases": []},
     ]
     return Catalog(
-        site={"id": "chennai", "name": "Chennai"},
-        area={"id": "upstream", "name": "Upstream processing"},
-        line={"id": "suite-1", "name": "Suite 1"},
-        units=[{"id": "BR-101", "type": "Bioreactor", "working_volume_l": 2000}],
+        enterprise={"id": "pharmanextgen", "name": "PharmaNextGen"},
+        sites=[
+            {
+                "id": "grange-castle",
+                "name": "Grange Castle",
+                "location": "Dublin, Ireland",
+                "role": "Biologics drug substance",
+            },
+            {"id": "tuas", "name": "Tuas", "location": "Singapore", "role": "Small-molecule API"},
+        ],
+        lines=[
+            {
+                "site": "grange-castle",
+                "area": {"id": "upstream", "name": "Upstream processing"},
+                "line": {"id": "suite-1", "name": "Suite 1", "process": "bioreactor"},
+            },
+            {
+                "site": "tuas",
+                "area": {"id": "api", "name": "API manufacturing"},
+                "line": {"id": "train-1", "name": "Train 1", "process": "api"},
+            },
+        ],
+        units=[
+            {
+                "id": "BR-101",
+                "line": "suite-1",
+                "type": "Bioreactor",
+                "class": "bioreactor",
+                "process": "bioreactor",
+                "position": 0,
+                "working_volume_l": 2000,
+            },
+            {
+                "id": "RX-201",
+                "line": "train-1",
+                "type": "ReactorCrystallizer",
+                "class": "reactor",
+                "process": "api",
+                "position": 0,
+                "working_volume_l": 4000,
+            },
+        ],
         modules=[
             {
                 "id": "BR-101/AIC-102",
@@ -113,6 +156,7 @@ def catalog() -> Catalog:
             {"phase": "PH_CTRL", "module": "BR-101/EM-PH", "role": "control"},
             {"phase": "PH_CTRL", "module": "BR-101/TIC-101", "role": "monitor"},
             {"phase": "TEMP_CTRL", "module": "BR-101/EM-THERMAL", "role": "control"},
+            {"phase": "DOSE_ADD", "module": "RX-201/EM-DOSING", "role": "control"},
         ],
         recipes=[
             {
@@ -173,7 +217,35 @@ def catalog() -> Catalog:
                 "actual": LEVERS,
                 "outcome": None,
                 "operations": [],
+                "consumed": [{"lot": "B2026-0140", "kg": 200.0}],
             },
+            {
+                "id": "B2026-0140",
+                "process": "api",
+                "cell": "RX-201",
+                "cells": ["RX-201"],
+                "recipe": "asa-v2",
+                "campaign": "MFG",
+                "status": "COMPLETE",
+                "start": T0 - timedelta(days=3),
+                "end": T0 - timedelta(days=2),
+                "end_reason": None,
+                "planned": API_LEVERS,
+                "actual": API_LEVERS,
+                "outcome": {"yield_pct": 87.2, "free_sa": 0.05, "disposition": "ACCEPTED"},
+                "operations": [],
+                "produced": "B2026-0140",
+                "consumed": [],
+            },
+        ],
+        lots=[
+            {
+                "id": "B2026-0140",
+                "material": "Acetylsalicylic acid API",
+                "quantity_kg": 571.0,
+                "produced_by": "B2026-0140",
+                "consumed_by": [{"batch": "B2026-0143", "kg": 200.0}],
+            }
         ],
         alerts=[
             {

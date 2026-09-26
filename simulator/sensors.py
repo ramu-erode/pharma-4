@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-# Noise standard deviation per analog variable, in engineering units.
+# Noise standard deviation per analog variable, in engineering units (bioreactor; the
+# other equipment classes pass their own tables).
 NOISE: dict[str, float] = {
     "temp": 0.02,
     "ph": 0.004,
@@ -38,6 +39,8 @@ QUANTUM: dict[str, float] = {"feed_total": 0.01, "base_total": 0.1}
 
 @dataclass(slots=True)
 class SensorBank:
+    noise: dict[str, float] = field(default_factory=lambda: NOISE)
+    quantum: dict[str, float] = field(default_factory=lambda: QUANTUM)
     offsets: dict[str, float] = field(default_factory=dict)
     stuck: dict[str, float] = field(default_factory=dict)  # name -> frozen reading
     last: dict[str, float] = field(default_factory=dict)  # last published reading
@@ -58,10 +61,10 @@ class SensorBank:
         frozen = self.stuck.get(name)
         if frozen is not None:
             value = frozen
-        elif name in NOISE:
-            value = true + self.offsets.get(name, 0.0) + NOISE[name] * self._normal(rng)
-        elif name in QUANTUM:
-            q = QUANTUM[name]
+        elif name in self.noise:
+            value = true + self.offsets.get(name, 0.0) + self.noise[name] * self._normal(rng)
+        elif name in self.quantum:
+            q = self.quantum[name]
             value = round(true / q) * q
         else:
             value = true  # setpoints and other exact values
@@ -70,7 +73,7 @@ class SensorBank:
 
     def stick(self, name: str) -> None:
         """Freeze a sensor at its last published reading (bit-identical from now on)."""
-        if name not in NOISE:
+        if name not in self.noise:
             raise ValueError(f"only analog PVs can stick, not {name!r}")
         if name in self.last:
             self.stuck[name] = self.last[name]

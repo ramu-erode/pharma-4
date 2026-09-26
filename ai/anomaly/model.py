@@ -13,6 +13,7 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 
 from ai.features import FEATURES
+from ai.profiles import AnomalyProfile, profile_for
 
 BIN_H = 1.0  # age bin width (hours since inoculation)
 MIN_BATCHES = 8  # widen a bin's pool until it spans at least this many batches
@@ -104,3 +105,8 @@ class AnomalyModel:
     thresholds: dict[str, float]  # channel -> threshold
     trained_on: list[str]
     features: tuple[str, ...] = FEATURES
+    cls: str = "bioreactor"  # the equipment class (ADR-0021)
+
+    @property
+    def profile(self) -> AnomalyProfile:
+        return profile_for(self.cls)

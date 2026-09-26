@@ -54,13 +54,17 @@ def test_v3_leaves_room_for_the_optimizer():
 
 def test_recipes_share_pars_and_nominals_sit_inside():
     all_r = recipes.load_all()
-    assert set(all_r) == {"v1", "v2", "v3"}
-    pars = {r.id: r.par for r in all_r.values()}
-    assert pars["v1"] == pars["v2"] == pars["v3"]
+    assert {r.id for r in recipes.of_process("bioreactor")} == {"v1", "v2", "v3"}
+    for process in ("bioreactor", "api", "osd"):
+        versions = recipes.of_process(process)
+        assert len(versions) >= 2
+        assert all(r.par == versions[0].par for r in versions), process
     for r in all_r.values():
         assert r.clip(r.nominal) == r.nominal
     assert recipes.current(date(2023, 6, 1)).id == "v1"
     assert recipes.current(date(2026, 9, 1)).id == "v3"
+    assert recipes.current(date(2026, 9, 1), "api").id == "asa-v2"
+    assert recipes.current(date(2026, 9, 1), "osd").id == "tab-v2"
 
 
 def test_truth_counterfactual_respects_frozen_shift():

@@ -3,14 +3,15 @@
 Pure: `build(catalog)` turns plain rows (read from Neo4j by `i3x.catalog`) into an
 `AddressSpace`. No driver, no broker, no clock.
 
-Shape:
+Shape (ADR-0016, ADR-0018, ADR-0020):
 
-    pharmaco > site > area > line > unit                      HasParent / HasChildren
+    pharmanextgen > site > area > line > unit                      HasParent / HasChildren
     unit > equipment modules > control modules > tags         HasComponent / ComponentOf
     unit > sensors, state/*, lab/*, ai/* data points          HasComponent / ComponentOf
     batches > batch > alerts, operator actions, recommendations    HasParent / HasChildren
-    recipes > recipe,  phase-classes > phase class            HasParent / HasChildren
-    RanOn, FollowsRecipe, ConcernsTag, ActedOn, Measures, Controls, Monitors   graph
+    recipes > recipe,  phase-classes > phase class,  materials > lot    HasParent / HasChildren
+    RanOn, FollowsRecipe, ConcernsTag, ActedOn, Measures, Controls, Monitors,
+    Produced, Consumed                                                                graph
 
 A data point's elementId is its UNS topic. Values come from the broker at read time
 (`topic` is set); every other object carries a static `value` from the graph.
@@ -26,20 +27,21 @@ from typing import Any
 
 from common import models as m
 from common import uns
-from common.models import Levers, PhaseClass, format_ts
+from common.models import format_ts
 from common.uns import UnitPath
 
 NS_I3X = "https://cesmii.org/i3x"
-NS_PHARMA = "urn:pharmaco:pharma-4"
+NS_PHARMA = "urn:pharmanextgen:pharma-4"
 NAMESPACES = [
     {"uri": NS_I3X, "displayName": "i3X"},
-    {"uri": NS_PHARMA, "displayName": "pharma-4 bioreactor POC"},
+    {"uri": NS_PHARMA, "displayName": "pharma-4 PharmaNextGen POC"},
 ]
 
 HAS_PARENT, HAS_CHILDREN = "HasParent", "HasChildren"
 HAS_COMPONENT, COMPONENT_OF = "HasComponent", "ComponentOf"
 RAN_ON, FOLLOWS_RECIPE, CONCERNS_TAG = "RanOn", "FollowsRecipe", "ConcernsTag"
 ACTED_ON, MEASURES, CONTROLS, MONITORS = "ActedOn", "Measures", "Controls", "Monitors"
+PRODUCED, CONSUMED = "Produced", "Consumed"
 
 _REL_PAIRS = [
     (HAS_PARENT, HAS_CHILDREN, NS_I3X),
@@ -51,6 +53,8 @@ _REL_PAIRS = [
     (MEASURES, "MeasuredBy", NS_PHARMA),
     (CONTROLS, "ControlledBy", NS_PHARMA),
     (MONITORS, "MonitoredBy", NS_PHARMA),
+    (PRODUCED, "ProducedBy", NS_PHARMA),
+    (CONSUMED, "ConsumedBy", NS_PHARMA),
 ]
 REVERSE: dict[str, str] = {}
 for _a, _b, _ in _REL_PAIRS:
@@ -68,6 +72,7 @@ RELATIONSHIP_TYPES = [
 ]
 
 ROOT_BATCHES, ROOT_RECIPES, ROOT_PHASES = "batches", "recipes", "phase-classes"
+ROOT_MATERIALS = "materials"
 
 # --- object types ----------------------------------------------------------------------------
 
@@ -90,7 +95,7 @@ def _array(items: dict[str, Any]) -> dict[str, Any]:
 
 
 QUANTILES = _object({"p10": NUM, "p50": NUM, "p90": NUM})
-LEVERS = _object({k: NUM for k in Levers.model_fields})
+LEVERS = {"type": "object", "additionalProperties": NUM}  # the batch's process's levers
 LEVER_ADVICE = {
     "type": "object",
     "additionalProperties": _object({"current": NUM, "recommended": NUM, "frozen": BOOL}),
@@ -124,26 +129,71 @@ class ObjectType:
 
 
 _NAMED = _object({"name": STR})
+
+
+def _some(required: dict[str, Any], optional: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {**required, **optional},
+        "required": list(required),
+    }
+
+
+UNIT_SCHEMA = _some(
+    {
+        "equipmentType": STR,
+        "equipmentClass": STR,
+        "process": STR,
+        "batch": _null("string"),
+        "operation": _null("string"),
+    },
+    {"workingVolumeL": NUM, "filterAreaM2": NUM, "rollWidthCm": NUM, "stations": INT},
+)
+# The equipment types in the plant model (config/plant.yaml), each an i3X object type.
+UNIT_TYPES = {
+    "Bioreactor": "Bioreactor (ISA-88 unit)",
+    "ReactorCrystallizer": "Reactor-crystallizer (ISA-88 unit)",
+    "FilterDryer": "Agitated filter-dryer (ISA-88 unit)",
+    "BinBlender": "Bin blender (ISA-88 unit)",
+    "RollerCompactor": "Roller compactor (ISA-88 unit)",
+    "RotaryTabletPress": "Rotary tablet press (ISA-88 unit)",
+}
+OUTCOME = _some(
+    {"disposition": _null("string")},
+    {
+        k: _null("number")
+        for k in (
+            "titer",
+            "peakVcd",
+            "viability",
+            "harvestDay",
+            "yieldPct",
+            "assay",
+            "freeSa",
+            "related",
+            "lod",
+            "d50",
+            "conversionIpc",
+            "blendUniformity",
+            "granuleD50",
+            "bulkDensity",
+            "dissolution",
+            "hardness",
+            "friability",
+            "av",
+        )
+    },
+)
 TYPES: dict[str, ObjectType] = {
     t.element_id: t
     for t in [
         ObjectType("EnterpriseType", "Enterprise", "Enterprise", _NAMED),
-        ObjectType("SiteType", "Site", "Site", _NAMED),
-        ObjectType("AreaType", "Area", "Area", _NAMED),
-        ObjectType("LineType", "Line", "Line", _NAMED),
         ObjectType(
-            "BioreactorType",
-            "Bioreactor (ISA-88 unit)",
-            "Equipment",
-            _object(
-                {
-                    "equipmentType": STR,
-                    "workingVolumeL": NUM,
-                    "batch": _null("string"),
-                    "operation": _null("string"),
-                }
-            ),
+            "SiteType", "Site", "Site", _some({"name": STR}, {"location": STR, "role": STR})
         ),
+        ObjectType("AreaType", "Area", "Area", _NAMED),
+        ObjectType("LineType", "Line", "Line", _some({"name": STR}, {"process": STR})),
+        *[ObjectType(f"{t}Type", name, "Equipment", UNIT_SCHEMA) for t, name in UNIT_TYPES.items()],
         ObjectType(
             "EquipmentModuleType",
             "Equipment module",
@@ -178,9 +228,9 @@ TYPES: dict[str, ObjectType] = {
         ObjectType("AnomalyScoreType", "Anomaly index (1.0 = threshold)", "ai", NUM),
         ObjectType(
             "YieldPredictionType",
-            "Predicted final titer",
+            "Predicted batch outcome (titer, or yield)",
             "ai",
-            _object({"titer": QUANTILES, "batchDay": NUM, "modelVersion": STR}),
+            _object({"target": STR, "value": QUANTILES, "batchDay": NUM, "modelVersion": STR}),
         ),
         ObjectType(
             "YieldRecommendationType",
@@ -189,6 +239,7 @@ TYPES: dict[str, ObjectType] = {
             _object(
                 {
                     "id": STR,
+                    "target": STR,
                     "levers": LEVER_ADVICE,
                     "predictedCurrent": QUANTILES,
                     "predictedRecommended": QUANTILES,
@@ -205,7 +256,9 @@ TYPES: dict[str, ObjectType] = {
             _object(
                 {
                     "batchId": STR,
+                    "process": STR,
                     "unit": STR,
+                    "units": _array(STR),
                     "recipe": STR,
                     "campaign": STR,
                     "status": STR,
@@ -214,16 +267,10 @@ TYPES: dict[str, ObjectType] = {
                     "endReason": _null("string"),
                     "plannedLevers": LEVERS,
                     "actualLevers": LEVERS,
-                    "outcome": _object(
-                        {
-                            "titer": _null("number"),
-                            "peakVcd": _null("number"),
-                            "viability": _null("number"),
-                            "harvestDay": _null("number"),
-                            "disposition": _null("string"),
-                        }
-                    ),
+                    "outcome": OUTCOME,
                     "operations": _array(OPERATION_RUN),
+                    "lotProduced": _null("string"),
+                    "lotsConsumed": _array(_object({"lot": STR, "quantityKg": NUM})),
                 }
             ),
         ),
@@ -272,6 +319,7 @@ TYPES: dict[str, ObjectType] = {
             _object(
                 {
                     "name": STR,
+                    "process": STR,
                     "version": INT,
                     "effectiveFrom": STR,
                     "nominalLevers": LEVERS,
@@ -286,6 +334,20 @@ TYPES: dict[str, ObjectType] = {
                             }
                         )
                     ),
+                }
+            ),
+        ),
+        ObjectType(
+            "MaterialLotType",
+            "Material lot",
+            "MaterialLot",
+            _object(
+                {
+                    "lot": STR,
+                    "material": STR,
+                    "quantityKg": _null("number"),
+                    "producedBy": _null("string"),
+                    "consumedBy": _array(_object({"batch": STR, "quantityKg": NUM})),
                 }
             ),
         ),
@@ -408,10 +470,10 @@ class AddressSpace:
 class Catalog:
     """Plain rows read from Neo4j; see `i3x.catalog` for the queries. Datetimes are aware."""
 
-    site: dict[str, Any]
-    area: dict[str, Any]
-    line: dict[str, Any]
-    units: list[dict[str, Any]]
+    enterprise: dict[str, Any]
+    sites: list[dict[str, Any]]  # id, name, location, role
+    lines: list[dict[str, Any]]  # site, area {id, name}, line {id, name, process}
+    units: list[dict[str, Any]]  # id, line, type, class, process, position, and properties
     modules: list[dict[str, Any]]  # equipment modules and control modules
     tags: list[dict[str, Any]]
     sensors: list[dict[str, Any]]
@@ -421,17 +483,42 @@ class Catalog:
     alerts: list[dict[str, Any]] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)
     recommendations: list[dict[str, Any]] = field(default_factory=list)
+    lots: list[dict[str, Any]] = field(default_factory=list)
 
 
-# Lab results the simulator publishes, with their units (simulator/engine.py LAB_UNITS).
-LAB_UNITS: dict[str, str] = {
-    "vcd": "1e6 cells/mL",
-    "viability": "%",
-    "glucose": "g/L",
-    "lactate": "g/L",
-    "ph_offline": "pH",
-    "titer": "g/L",
+# Lab results the simulator publishes on each equipment class, with their units (the
+# engines' LAB_UNITS; tests/i3x/test_space.py keeps the two in step).
+LAB_UNITS: dict[str, dict[str, str]] = {
+    "bioreactor": {
+        "vcd": "1e6 cells/mL",
+        "viability": "%",
+        "glucose": "g/L",
+        "lactate": "g/L",
+        "ph_offline": "pH",
+        "titer": "g/L",
+    },
+    "reactor": {"conversion_ipc": "%"},
+    "filter_dryer": {
+        "assay": "%",
+        "free_sa": "%",
+        "related": "%",
+        "lod": "%",
+        "d50": "µm",
+        "yield": "%",
+    },
+    "blender": {"blend_uniformity": "%"},
+    "roller_compactor": {"granule_d50": "µm", "bulk_density": "g/mL"},
+    "tablet_press": {
+        "assay": "%",
+        "av": "",
+        "dissolution": "%",
+        "hardness": "N",
+        "friability": "%",
+        "free_sa": "%",
+        "yield": "%",
+    },
 }
+SCORED_CLASSES = ("bioreactor", "reactor", "filter_dryer", "roller_compactor", "tablet_press")
 
 
 def _ts(value: datetime | None) -> str | None:
@@ -440,41 +527,75 @@ def _ts(value: datetime | None) -> str | None:
 
 def build(cat: Catalog) -> AddressSpace:
     space = AddressSpace()
-    site, area, line = cat.site["id"], cat.area["id"], cat.line["id"]
     enterprise = uns.ENTERPRISE
-    paths = [
-        (enterprise, enterprise, "EnterpriseType", None),
-        (f"{enterprise}/{site}", cat.site["name"], "SiteType", enterprise),
-        (f"{enterprise}/{site}/{area}", cat.area["name"], "AreaType", f"{enterprise}/{site}"),
-        (
-            f"{enterprise}/{site}/{area}/{line}",
-            cat.line["name"],
-            "LineType",
-            f"{enterprise}/{site}/{area}",
-        ),
-    ]
-    for eid, name, type_id, parent in paths:
-        space.add(Obj(eid, name, type_id, value={"name": name}), parent)
-    line_id = paths[-1][0]
+    space.add(
+        Obj(
+            enterprise,
+            cat.enterprise.get("name", enterprise),
+            "EnterpriseType",
+            value={"name": cat.enterprise.get("name", enterprise)},
+        )
+    )
+    for site in cat.sites:
+        sid = f"{enterprise}/{site['id']}"
+        value = {"name": site["name"], **{k: site[k] for k in ("location", "role") if site.get(k)}}
+        space.add(
+            Obj(sid, site["name"], "SiteType", description=site.get("role"), value=value),
+            enterprise,
+        )
+    line_ids: dict[str, str] = {}  # line id -> elementId
+    for ln in cat.lines:
+        area_id = f"{enterprise}/{ln['site']}/{ln['area']['id']}"
+        if area_id not in space.objects:
+            name = ln["area"]["name"]
+            space.add(
+                Obj(area_id, name, "AreaType", value={"name": name}), f"{enterprise}/{ln['site']}"
+            )
+        lid = f"{area_id}/{ln['line']['id']}"
+        value = {"name": ln["line"]["name"], "process": ln["line"].get("process")}
+        space.add(Obj(lid, ln["line"]["name"], "LineType", value=value), area_id)
+        line_ids[ln["line"]["id"]] = lid
 
+    phases_of: dict[str, set[str]] = {}
+    for b in cat.bindings:
+        phases_of.setdefault(b["module"].split("/")[0], set()).add(b["phase"])
     units: dict[str, UnitPath] = {}
     for u in cat.units:
-        if u["type"] != "Bioreactor":
-            raise ValueError(f"{u['id']}: only bioreactors are modelled, got {u['type']!r}")
+        if u["type"] not in UNIT_TYPES:
+            raise ValueError(f"{u['id']}: unknown equipment type {u['type']!r}")
+        line_id = line_ids[u["line"]]
+        site, area, line = line_id.split("/")[1:4]
         unit = UnitPath(site, area, line, u["id"])
         units[u["id"]] = unit
+        props = {
+            key: u[prop]
+            for key, prop in (
+                ("workingVolumeL", "working_volume_l"),
+                ("filterAreaM2", "filter_area_m2"),
+                ("rollWidthCm", "roll_width_cm"),
+                ("stations", "stations"),
+            )
+            if u.get(prop) is not None
+        }
+        home = u["process"] == "bioreactor" or u.get("position", 0) == 0
         space.add(
             Obj(
                 unit.prefix,
                 u["id"],
-                "BioreactorType",
-                description=f"{u['id']}, {u['working_volume_l']:g} L fed-batch bioreactor",
-                value={"equipmentType": u["type"], "workingVolumeL": u["working_volume_l"]},
+                f"{u['type']}Type",
+                description=f"{u['id']}, {UNIT_TYPES[u['type']].split(' (')[0].lower()} "
+                f"({u['process']} process)",
+                value={
+                    "equipmentType": u["type"],
+                    "equipmentClass": u["class"],
+                    "process": u["process"],
+                    **props,
+                },
                 live={"batch": uns.state_batch(unit), "operation": uns.state_operation(unit)},
             ),
             line_id,
         )
-        _add_data_points(space, unit)
+        _add_data_points(space, unit, u["class"], sorted(phases_of.get(u["id"], ())), home)
 
     # graph module id (BR-101/EM-PH) -> elementId (…/BR-101/EM-PH, …/BR-101/EM-PH/AIC-102)
     module_ids: dict[str, str] = {}
@@ -541,7 +662,7 @@ def build(cat: Catalog) -> AddressSpace:
     space.add(
         Obj(ROOT_PHASES, "Phase classes", "FolderType", value=_folder("ISA-88 phase classes", 0))
     )
-    phases = sorted({b["phase"] for b in cat.bindings} | {p.value for p in PhaseClass})
+    phases = sorted({b["phase"] for b in cat.bindings})
     for phase in phases:
         bound = [b for b in cat.bindings if b["phase"] == phase and b["module"] in module_ids]
         pid = f"phase-class/{phase}"
@@ -578,6 +699,7 @@ def build(cat: Catalog) -> AddressSpace:
                 "RecipeType",
                 value={
                     "name": r["name"],
+                    "process": r.get("process", "bioreactor"),
                     "version": r["version"],
                     "effectiveFrom": r["effective_from"],
                     "nominalLevers": r["nominal"],
@@ -592,7 +714,7 @@ def build(cat: Catalog) -> AddressSpace:
             ROOT_BATCHES,
             "Batches",
             "FolderType",
-            value=_folder("Every batch run in the suite, oldest first", len(cat.batches)),
+            value=_folder("Every batch run at every site, oldest first", len(cat.batches)),
         )
     )
     for b in sorted(cat.batches, key=lambda r: r["id"]):
@@ -607,19 +729,63 @@ def build(cat: Catalog) -> AddressSpace:
             ),
             ROOT_BATCHES,
         )
-        if b["cell"] in units:
-            space.link(b["id"], RAN_ON, units[b["cell"]].prefix)
+        for cell in b.get("cells") or [b["cell"]]:
+            if cell in units:
+                space.link(b["id"], RAN_ON, units[cell].prefix)
         space.link(b["id"], FOLLOWS_RECIPE, f"recipe/{b['recipe']}")
 
     _add_events(space, cat)
+    _add_lots(space, cat)
     return space
+
+
+def _add_lots(space: AddressSpace, cat: Catalog) -> None:
+    """Material lots and their genealogy (ADR-0020)."""
+    space.add(
+        Obj(
+            ROOT_MATERIALS,
+            "Materials",
+            "FolderType",
+            value=_folder("Material lots: what each batch made and used", len(cat.lots)),
+        )
+    )
+    for lot in sorted(cat.lots, key=lambda r: r["id"]):
+        lid = f"lot/{lot['id']}"
+        consumed = [c for c in lot.get("consumed_by", []) if c.get("batch")]
+        space.add(
+            Obj(
+                lid,
+                f"Lot {lot['id']}",
+                "MaterialLotType",
+                description=f"{lot['material']} lot {lot['id']}",
+                value={
+                    "lot": lot["id"],
+                    "material": lot["material"],
+                    "quantityKg": lot.get("quantity_kg"),
+                    "producedBy": lot.get("produced_by"),
+                    "consumedBy": [
+                        {"batch": c["batch"], "quantityKg": c["kg"]}
+                        for c in sorted(consumed, key=lambda c: c["batch"])
+                    ],
+                },
+            ),
+            ROOT_MATERIALS,
+        )
+        if lot.get("produced_by"):
+            space.link(lot["produced_by"], PRODUCED, lid)
+        for c in consumed:
+            space.link(c["batch"], CONSUMED, lid)
 
 
 def _folder(description: str, count: int) -> dict[str, Any]:
     return {"description": description, "count": count}
 
 
-def _add_data_points(space: AddressSpace, unit: UnitPath) -> None:
+def _add_data_points(
+    space: AddressSpace, unit: UnitPath, cls: str, phases: list[str], home: bool
+) -> None:
+    """A unit's state, lab and AI data points. AI points exist where the services publish:
+    anomaly scores on scored classes, predictions and advice on a batch's home unit."""
     cell = unit.cell
     points: list[tuple[str, str, str, str]] = [
         (uns.state_batch(unit), f"{cell} batch", "BatchStateType", "Batch running on the unit"),
@@ -631,41 +797,48 @@ def _add_data_points(space: AddressSpace, unit: UnitPath) -> None:
         ),
         *[
             (
-                uns.state_phase(unit, p.value),
-                f"{cell} {p.value}",
+                uns.state_phase(unit, p),
+                f"{cell} {p}",
                 "PhaseStateType",
-                f"State of the {p.value} phase (phases run in parallel)",
+                f"State of the {p} phase (phases run in parallel)",
             )
-            for p in PhaseClass
+            for p in phases
         ],
         *[
             (
                 uns.lab(unit, name),
                 f"{cell} {name} (lab)",
                 "LabResultType",
-                f"Daily lab {name} in {u}",
+                f"Lab {name}" + (f" in {u}" if u else ""),
             )
-            for name, u in LAB_UNITS.items()
+            for name, u in LAB_UNITS.get(cls, {}).items()
         ],
-        (
-            uns.ai_score(unit),
-            f"{cell} anomaly index",
-            "AnomalyScoreType",
-            "Anomaly index; 1.0 is the alert threshold (advisory)",
-        ),
-        (
-            uns.ai_prediction(unit),
-            f"{cell} titer prediction",
-            "YieldPredictionType",
-            "Predicted final titer (g/L), P10/P50/P90 (advisory)",
-        ),
-        (
-            uns.ai_recommendation(unit),
-            f"{cell} recommendation",
-            "YieldRecommendationType",
-            "Open setpoint recommendation; no value when none is open (advisory)",
-        ),
     ]
+    if cls in SCORED_CLASSES:
+        points.append(
+            (
+                uns.ai_score(unit),
+                f"{cell} anomaly index",
+                "AnomalyScoreType",
+                "Anomaly index; 1.0 is the alert threshold (advisory)",
+            )
+        )
+    if home:
+        what = "final titer (g/L)" if cls == "bioreactor" else "batch yield (%)"
+        points += [
+            (
+                uns.ai_prediction(unit),
+                f"{cell} yield prediction",
+                "YieldPredictionType",
+                f"Predicted {what}, P10/P50/P90 (advisory)",
+            ),
+            (
+                uns.ai_recommendation(unit),
+                f"{cell} recommendation",
+                "YieldRecommendationType",
+                "Open setpoint recommendation; no value when none is open (advisory)",
+            ),
+        ]
     for topic, name, type_id, description in points:
         space.add(
             Obj(
@@ -685,7 +858,9 @@ def _batch_value(b: dict[str, Any]) -> dict[str, Any]:
     outcome = b.get("outcome") or {}
     return {
         "batchId": b["id"],
+        "process": b.get("process", "bioreactor"),
         "unit": b["cell"],
+        "units": sorted(b.get("cells") or [b["cell"]]),
         "recipe": b["recipe"],
         "campaign": b["campaign"],
         "status": b["status"],
@@ -695,14 +870,44 @@ def _batch_value(b: dict[str, Any]) -> dict[str, Any]:
         "plannedLevers": b["planned"],
         "actualLevers": b["actual"],
         "outcome": {
-            "titer": outcome.get("titer"),
-            "peakVcd": outcome.get("peak_vcd"),
-            "viability": outcome.get("viability"),
-            "harvestDay": outcome.get("harvest_day"),
             "disposition": outcome.get("disposition"),
+            **{
+                key: outcome[prop]
+                for key, prop in OUTCOME_PROPS.items()
+                if outcome.get(prop) is not None
+            },
         },
         "operations": _operations(b["operations"]),
+        "lotProduced": b.get("produced"),
+        "lotsConsumed": [
+            {"lot": c["lot"], "quantityKg": c["kg"]}
+            for c in sorted(b.get("consumed") or [], key=lambda c: c["lot"])
+            if c.get("lot")
+        ],
     }
+
+
+# i3X outcome key -> the graph's Outcome property (graph.core.OUTCOME_LAB and friends).
+OUTCOME_PROPS = {
+    "titer": "titer",
+    "peakVcd": "peak_vcd",
+    "viability": "viability",
+    "harvestDay": "harvest_day",
+    "yieldPct": "yield_pct",
+    "assay": "assay",
+    "freeSa": "free_sa",
+    "related": "related",
+    "lod": "lod",
+    "d50": "d50",
+    "conversionIpc": "conversion_ipc",
+    "blendUniformity": "blend_uniformity",
+    "granuleD50": "granule_d50",
+    "bulkDensity": "bulk_density",
+    "dissolution": "dissolution",
+    "hardness": "hardness",
+    "friability": "friability",
+    "av": "av",
+}
 
 
 def _operations(ops: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

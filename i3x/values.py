@@ -35,13 +35,15 @@ def to_value(payload: BaseModel) -> Any:
             return v
         case m.Prediction():
             return {
-                "titer": v.titer.model_dump(),
+                "target": v.target,
+                "value": v.value.model_dump(),
                 "batchDay": v.batch_day,
                 "modelVersion": v.model_version,
             }
         case m.Recommendation():
             return {
                 "id": v.id,
+                "target": v.target,
                 "levers": {k: a.model_dump() for k, a in v.levers.items()},
                 "predictedCurrent": v.predicted_current.model_dump(),
                 "predictedRecommended": v.predicted_recommended.model_dump(),

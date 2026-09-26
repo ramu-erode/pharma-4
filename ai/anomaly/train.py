@@ -17,8 +17,7 @@ import numpy as np
 
 from ai.anomaly.detector import AlertChange, Detector, Limit, Window, score_channels
 from ai.anomaly.model import AgeScaler, AnomalyModel, fit_op_models
-from ai.context import SCORED_OPERATIONS
-from ai.features import FEATURES
+from ai.profiles import BIOREACTOR, AnomalyProfile
 
 FOLDS = 5
 THRESHOLD_QUANTILE = 0.97
@@ -54,40 +53,46 @@ def run(model: AnomalyModel, batch: BatchInput) -> BatchResult:
     return BatchResult(batch.batch_id, changes, index, raw)
 
 
-def fit(clean: list[BatchInput], seed: int) -> AnomalyModel:
+def fit(clean: list[BatchInput], seed: int, profile: AnomalyProfile = BIOREACTOR) -> AnomalyModel:
     if len(clean) < 2 * FOLDS:
         raise ValueError(f"need at least {2 * FOLDS} clean batches to fit and calibrate")
     folds = np.random.default_rng(seed).permutation(len(clean)) % FOLDS
     maxima: dict[str, list[float]] = {}
     for k in range(FOLDS):
-        partial = _fit_models([b for b, f in zip(clean, folds, strict=True) if f != k], seed)
+        partial = _fit_models(
+            [b for b, f in zip(clean, folds, strict=True) if f != k], seed, profile
+        )
         held_out = [b for b, f in zip(clean, folds, strict=True) if f == k]
         for c, values in sustained_maxima(partial, held_out).items():
             maxima.setdefault(c, []).extend(values)
-    model = _fit_models(clean, seed)
+    model = _fit_models(clean, seed, profile)
     model.thresholds = {c: float(np.quantile(v, THRESHOLD_QUANTILE)) for c, v in maxima.items()}
     return model
 
 
-def _fit_models(batches: list[BatchInput], seed: int) -> AnomalyModel:
+def _fit_models(batches: list[BatchInput], seed: int, profile: AnomalyProfile) -> AnomalyModel:
     scaler, ops = AgeScaler(), {}
-    for op in SCORED_OPERATIONS:
+    for op in profile.scored_ops:
         rows = [
             (i, w)
             for i, b in enumerate(batches)
             for w in b.windows
             if w.operation == op and not w.settling
         ]
+        if not rows:
+            continue
         X = np.stack([w.x for _, w in rows])
         ages = np.array([w.age_h for _, w in rows])
         scaler.fit(op, ages, X, groups=np.array([i for i, _ in rows]))
         ops[op] = fit_op_models(scaler.transform(op, ages, X), seed)
     return AnomalyModel(
-        version=version_of(batches, seed),
+        version=version_of(batches, seed, profile),
         scaler=scaler,
         ops=ops,
         thresholds={},
         trained_on=sorted(b.batch_id for b in batches),
+        features=profile.features,
+        cls=profile.cls,
     )
 
 
@@ -108,15 +113,16 @@ def sustained_maxima(model: AnomalyModel, batches: list[BatchInput]) -> dict[str
     return maxima
 
 
-def version_of(batches: list[BatchInput], seed: int) -> str:
-    return version_for([b.batch_id for b in batches], seed)
+def version_of(batches: list[BatchInput], seed: int, profile: AnomalyProfile = BIOREACTOR) -> str:
+    return version_for([b.batch_id for b in batches], seed, profile)
 
 
-def version_for(batch_ids: list[str], seed: int) -> str:
-    """A model's identity: feature set, seed and the exact training batches. Bootstrap
-    retrains only when this changes."""
+def version_for(batch_ids: list[str], seed: int, profile: AnomalyProfile = BIOREACTOR) -> str:
+    """A model's identity: equipment class, feature set, seed and the exact training
+    batches. Bootstrap retrains only when this changes."""
     h = hashlib.sha256()
-    h.update(f"{FEATURE_VERSION}:{seed}:{','.join(FEATURES)}".encode())
+    cls = "" if profile is BIOREACTOR else f"{profile.cls}:"  # the bioreactor's is unchanged
+    h.update(f"{FEATURE_VERSION}:{cls}{seed}:{','.join(profile.features)}".encode())
     for batch_id in sorted(batch_ids):
         h.update(batch_id.encode())
     return "anomaly-" + h.hexdigest()[:12]

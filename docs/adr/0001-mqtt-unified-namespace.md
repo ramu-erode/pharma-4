@@ -1,6 +1,6 @@
 # ADR-0001: MQTT Unified Namespace as the integration backbone
 
-Status: Accepted; amended by ADR-0009
+Status: Accepted; amended by ADR-0009, ADR-0018
 Date: 2026-09-23
 
 ## Context

@@ -65,7 +65,11 @@ OWNED = {
         uns.events(UNIT, "operator"),
         uns.sim_clock(),
         uns.sim_faults("BR-101"),
+        uns.sim_faults("RX-201"),
+        uns.sim_inventory(),
+        uns.events(UNIT, "material"),
     ],
+    "bootstrap": [uns.sim_opening_stock()],
     "edge-adapter": [
         uns.pv(UNIT, "ph"),
         uns.sp(UNIT, "temperature"),
@@ -93,7 +97,14 @@ def test_exactly_one_writer_per_branch(owner, topic):
 
 @pytest.mark.parametrize("user", ["anomaly", "yield", "i3x"])  # i3x feeds the LLM (ADR-0017)
 @pytest.mark.parametrize(
-    "topic", [uns.sim_faults("BR-101"), uns.sim_clock(), *[uns.sim_cmd(c) for c in SimCommand]]
+    "topic",
+    [
+        uns.sim_faults("BR-101"),
+        uns.sim_clock(),
+        uns.sim_inventory(),
+        uns.sim_opening_stock(),
+        *[uns.sim_cmd(c) for c in SimCommand],
+    ],
 )
 def test_ai_services_cannot_see_sim(user, topic):
     assert not can(user, "read", topic)
@@ -105,6 +116,9 @@ def test_ai_services_cannot_see_sim(user, topic):
         ("simulator", uns.sim_cmd(SimCommand.CLOCK)),
         ("simulator", uns.state_batch(UNIT)),  # monotonic clock start (ADR-0009)
         ("simulator", uns.sim_clock()),  # batch sequence survives a restart
+        ("simulator", uns.sim_inventory()),  # the stock survives a restart (ADR-0020)
+        ("simulator", uns.sim_opening_stock()),
+        ("graph-sync", uns.events(UNIT, "material")),
         ("edge-adapter", uns.edge_raw("BR101", "BR101.AIC-102.PV")),
         ("edge-adapter", uns.state_batch(UNIT)),
         ("historian", uns.pv(UNIT, "ph")),

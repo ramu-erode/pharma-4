@@ -9,19 +9,19 @@ from tests.samples import UNIT
 
 
 def test_unit_prefix_and_device():
-    assert UNIT.prefix == "pharmaco/chennai/upstream/suite-1/BR-101"
+    assert UNIT.prefix == "pharmanextgen/grange-castle/upstream/suite-1/BR-101"
     assert UNIT.device == "BR101"
 
 
 @pytest.mark.parametrize(
     ("topic", "expected"),
     [
-        (uns.pv(UNIT, "ph"), "pharmaco/chennai/upstream/suite-1/BR-101/pv/ph"),
+        (uns.pv(UNIT, "ph"), "pharmanextgen/grange-castle/upstream/suite-1/BR-101/pv/ph"),
         (uns.state_phase(UNIT, "TEMP_CTRL"), f"{UNIT.prefix}/state/phase/temp_ctrl"),
         (uns.ai_alert(UNIT, "stats-co2_flow"), f"{UNIT.prefix}/ai/anomaly/alert/stats-co2_flow"),
         (uns.ai_recommendation(UNIT), f"{UNIT.prefix}/ai/yield/recommendation"),
-        (uns.meta_tag("BR-101", TopicClass.SP, "do"), "pharmaco/_meta/tags/BR-101/sp/do"),
-        (uns.meta_status("edge-adapter"), "pharmaco/_meta/edge-adapter/status"),
+        (uns.meta_tag("BR-101", TopicClass.SP, "do"), "pharmanextgen/_meta/tags/BR-101/sp/do"),
+        (uns.meta_status("edge-adapter"), "pharmanextgen/_meta/edge-adapter/status"),
         (uns.edge_raw("BR101", "BR101.AIC-102.PV"), "edge/raw/BR101/BR101.AIC-102.PV"),
         (uns.sim_cmd(SimCommand.CLOCK), "_sim/cmd/clock"),
         (uns.sim_faults("BR-102"), "_sim/faults/BR-102"),
@@ -68,19 +68,19 @@ def test_parse_details():
     p = uns.parse(uns.edge_raw("BR101", "BR101.AIC-102.PV"))
     assert (p.device, p.raw_tag) == ("BR101", "BR101.AIC-102.PV")
     assert uns.parse("_sim/cmd/fault").command is SimCommand.FAULT
-    assert uns.parse("pharmaco/_meta/tags/BR-101/pv/ph").cell == "BR-101"
+    assert uns.parse("pharmanextgen/_meta/tags/BR-101/pv/ph").cell == "BR-101"
 
 
 @pytest.mark.parametrize(
     "bad",
     [
-        "pharmaco/chennai/upstream/suite-1/BR-101/pv/PH",  # uppercase name
-        "pharmaco/chennai/upstream/suite-1/br-101/pv/ph",  # cell not BR-101 style
-        "pharmaco/chennai/upstream/suite-1/BR-101/xx/ph",  # unknown class
-        "pharmaco/chennai/upstream/BR-101/pv/ph",  # missing a level
+        "pharmanextgen/grange-castle/upstream/suite-1/BR-101/pv/PH",  # uppercase name
+        "pharmanextgen/grange-castle/upstream/suite-1/br-101/pv/ph",  # cell not BR-101 style
+        "pharmanextgen/grange-castle/upstream/suite-1/BR-101/xx/ph",  # unknown class
+        "pharmanextgen/grange-castle/upstream/BR-101/pv/ph",  # missing a level
         "edge/raw/BR101/BR102.AIC-102.PV",  # tag of another device
         "_sim/cmd/reboot",
-        "pharmaco/_meta/tags/BR-101/pv",
+        "pharmanextgen/_meta/tags/BR-101/pv",
         "somewhere/else",
         "",
     ],
@@ -97,7 +97,7 @@ def test_parse_rejects(bad):
         lambda: uns.pv(UNIT, "ph/raw"),
         lambda: uns.ai_alert(UNIT, "nolayer"),
         lambda: uns.meta_status("tags"),
-        lambda: uns.UnitPath("chennai", "upstream", "suite-1", "BR101"),
+        lambda: uns.UnitPath("grange-castle", "upstream", "suite-1", "BR101"),
     ],
 )
 def test_builders_reject(call):

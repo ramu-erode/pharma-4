@@ -14,19 +14,22 @@ from typing import Any
 
 from neo4j import Driver
 
-from common.models import Levers
+from common.models import LEVER_MODELS
 from i3x.space import AddressSpace, Catalog, build
 
 log = logging.getLogger(__name__)
 
-PLANT = (
+ENTERPRISE = "MATCH (e:Enterprise) RETURN e{.id, .name} AS enterprise"
+SITES = (
+    "MATCH (:Enterprise)-[:HAS_SITE]->(s:Site) "
+    "RETURN s{.id, .name, .location, .role} AS site ORDER BY s.id"
+)
+LINES = (
     "MATCH (s:Site)-[:HAS_AREA]->(a:Area)-[:HAS_LINE]->(l:Line) "
-    "RETURN s{.id, .name} AS site, a{.id, .name} AS area, l{.id, .name} AS line"
+    "RETURN s.id AS site, a{.id, .name} AS area, l{.id, .name, .process} AS line "
+    "ORDER BY s.id, l.id"
 )
-UNITS = (
-    "MATCH (:Line)-[:HAS_UNIT]->(u:Equipment) "
-    "RETURN u.id AS id, u.type AS type, u.working_volume_l AS working_volume_l ORDER BY id"
-)
+UNITS = "MATCH (l:Line)-[:HAS_UNIT]->(u:Equipment) RETURN u{.*, line: l.id} AS unit ORDER BY u.id"
 MODULES = (
     "MATCH (u:Equipment)-[:HAS_EM]->(em:EquipmentModule) "
     "RETURN em.id AS id, u.id AS unit, em.module AS module, em.name AS name, null AS parent "
@@ -58,13 +61,19 @@ RECIPES = (
 BATCHES = (
     "MATCH (b:Batch) "
     "OPTIONAL MATCH (b)-[:RESULTED_IN]->(o:Outcome) "
+    "OPTIONAL MATCH (b)-[:PRODUCED]->(made:MaterialLot) "
+    "WITH b, o, head(collect(made.id)) AS produced, "
+    "[(b)-[c:CONSUMED]->(l:MaterialLot) | {lot: l.id, kg: c.quantity_kg}] AS consumed, "
+    "[(b)-[:RAN_ON]->(u:Equipment) | u.id] AS cells "
     "OPTIONAL MATCH (b)-[:HAS_OPERATION]->(op:Operation) "
     "OPTIONAL MATCH (op)-[:HAS_PHASE]->(pi:PhaseInstance) "
     "OPTIONAL MATCH (pi)-[:HAD_HOLD]->(h:Hold) "
-    "WITH b, o, op, pi, count(h) AS holds "
-    "WITH b, o, op, collect(pi{.phase, .state, .start, .end, holds: holds}) AS phases "
-    "WITH b, o, collect(op{.name, .start, .end, phases: phases}) AS operations "
-    "RETURN b AS batch, o AS outcome, operations"
+    "WITH b, o, produced, consumed, cells, op, pi, count(h) AS holds "
+    "WITH b, o, produced, consumed, cells, op, "
+    "collect(pi{.phase, .state, .start, .end, holds: holds}) AS phases "
+    "WITH b, o, produced, consumed, cells, "
+    "collect(op{.name, .start, .end, phases: phases}) AS operations "
+    "RETURN b AS batch, o AS outcome, operations, produced, consumed, cells"
 )
 ALERTS = (
     "MATCH (b:Batch)-[:HAS_EVENT]->(e:Event {type: 'alert'}) "
@@ -81,6 +90,18 @@ ACTIONS = (
 RECOMMENDATIONS = (
     "MATCH (b:Batch)-[:HAS_RECOMMENDATION]->(r:Recommendation) RETURN r AS rec, b.id AS batch"
 )
+LOTS = (
+    "MATCH (l:MaterialLot) "
+    "OPTIONAL MATCH (pb:Batch)-[:PRODUCED]->(l) "
+    "RETURN l.id AS id, l.material AS material, l.quantity_kg AS quantity_kg, "
+    "head(collect(pb.id)) AS produced_by, "
+    "[(cb:Batch)-[c:CONSUMED]->(l) | {batch: cb.id, kg: c.quantity_kg}] AS consumed_by "
+    "ORDER BY id"
+)
+
+
+def _levers(process: str | None) -> list[str]:
+    return list(LEVER_MODELS[process or "bioreactor"].model_fields)
 
 
 def native(value: Any) -> Any:
@@ -104,25 +125,30 @@ def read(driver: Driver) -> Catalog:
         def rows(query: str) -> list[dict[str, Any]]:
             return [native(dict(r)) for r in s.run(query)]
 
-        plant = rows(PLANT)[0]
-        levers = list(Levers.model_fields)
         batches = [
             {
                 **r["batch"],
+                "process": r["batch"].get("process") or "bioreactor",
                 "end_reason": r["batch"].get("end_reason"),
                 "end": r["batch"].get("end"),
-                "planned": {k: r["batch"][f"planned_{k}"] for k in levers},
-                "actual": {k: r["batch"][k] for k in levers},
+                "planned": {
+                    k: r["batch"].get(f"planned_{k}") for k in _levers(r["batch"].get("process"))
+                },
+                "actual": {k: r["batch"].get(k) for k in _levers(r["batch"].get("process"))},
                 "outcome": r["outcome"],
                 "operations": r["operations"],
+                "produced": r["produced"],
+                "consumed": r["consumed"],
+                "cells": r["cells"],
             }
             for r in rows(BATCHES)
         ]
+        enterprise = rows(ENTERPRISE)
         return Catalog(
-            site=plant["site"],
-            area=plant["area"],
-            line=plant["line"],
-            units=rows(UNITS),
+            enterprise=enterprise[0]["enterprise"] if enterprise else {"id": "pharmanextgen"},
+            sites=[r["site"] for r in rows(SITES)],
+            lines=rows(LINES),
+            units=[r["unit"] for r in rows(UNITS)],
             modules=rows(MODULES),
             tags=rows(TAGS),
             sensors=rows(SENSORS),
@@ -131,7 +157,7 @@ def read(driver: Driver) -> Catalog:
                 {
                     **r["recipe"],
                     "effective_from": r["recipe"]["effective_from"].isoformat(),
-                    "nominal": {k: r["recipe"][k] for k in levers},
+                    "nominal": {k: r["recipe"][k] for k in _levers(r["recipe"].get("process"))},
                     "limits": [
                         {
                             "parameter": lim["parameter"],
@@ -169,6 +195,7 @@ def read(driver: Driver) -> Catalog:
                 for r in rows(ACTIONS)
             ],
             recommendations=[{**r["rec"], "batch": r["batch"]} for r in rows(RECOMMENDATIONS)],
+            lots=rows(LOTS),
         )
 
 

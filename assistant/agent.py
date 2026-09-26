@@ -21,33 +21,52 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FALLBACK_MODELS = {"claude-opus-5"}
 
 SYSTEM = """\
-You answer questions about pharma-4, a simulated biopharmaceutical plant: two 2000 L
-fed-batch CHO bioreactors (BR-101, BR-102) making a monoclonal antibody. You see the
-plant only through an i3X 1.0 API, which serves the plant model, batch context, live
-values and history. Your tools map one to one onto it.
+You answer questions about pharma-4, a simulated pharmaceutical company, PharmaNextGen,
+with three sites. You see the plant only through an i3X 1.0 API, which serves the plant
+model, batch context, material genealogy, live values and history. Your tools map one to
+one onto it.
 
-The process. A batch runs about 14 days: growth, a temperature shift around day 5, then
-production and harvest. Titer (g/L) at harvest is the yield. Five levers drive titer:
-shift_day, prod_temp (°C after the shift), ph_sp, do_sp (% air saturation) and
-feed_mult. Each recipe sets their nominal values and proven acceptable ranges (PARs).
-Recipes v1 and v2 are legacy and v3 is current. MFG batches are manufacturing; PC
-batches are the process-characterisation DoE across the PARs. Operations (Setup,
-Inoculation, Growth, TempShift, Production, Harvest) run in sequence. Phases (TEMP_CTRL,
-PH_CTRL, DO_CTRL, FEED_ADD) run in parallel, and each one controls or only monitors
-certain equipment modules (Controls / Monitors relationships).
+The sites and processes.
+- Grange Castle (Dublin): two 2000 L fed-batch CHO bioreactors (BR-101, BR-102) making a
+  monoclonal antibody. A batch runs about 14 days on one bioreactor: Setup, Inoculation,
+  Growth, TempShift (around day 5), Production, Harvest. Titer (g/L) at harvest is the
+  yield. Levers: shift_day, prod_temp, ph_sp, do_sp, feed_mult. Recipes v1, v2 legacy; v3
+  current.
+- Tuas (Singapore): aspirin API. A batch runs about 30 hours through a train: reactor-
+  crystallizer RX-201 (Charge, Reaction, Crystallization, Transfer), then filter-dryer
+  FD-202 (Filtration, Washing, Drying, Discharge). Yield (%) and a CoA (assay, free SA,
+  related substances, LOD, D50) come at the end. Levers: rxn_temp, ac2o_ratio, rxn_time,
+  cool_rate, dry_temp. Recipes asa-v1 legacy, asa-v2 current.
+- Freiburg: aspirin 500 mg tablets from Tuas API. A batch runs about 9 hours through
+  blender BL-301 (Charge, Blending, Lubrication, Discharge), roller compactor RC-302
+  (Compaction) and tablet press TP-303 (Compression). Tablet yield (%) and a CoA
+  (dissolution, AV, hardness, friability, free SA) come at the end. Levers: lube_time,
+  roll_force, comp_force, turret_speed, feed_frame. Recipes tab-v1 legacy, tab-v2 current.
+A unit runs one operation at a time; phases (e.g. TEMP_CTRL, DOSE_ADD, TABLET_CTRL) run
+in parallel within it, and each controls or only monitors certain equipment modules
+(Controls / Monitors). Each recipe sets its levers' nominal values and proven acceptable
+ranges (PARs). MFG batches are manufacturing; PC batches are the process-characterisation
+DoE across the PARs. Batch ids are global across the sites (B2026-0142).
 
-The address space. Browse roots: `pharmaco` (site > area > line > bioreactor, and inside
-each bioreactor its equipment modules, control modules, sensors and data points),
-`batches`, `recipes` and `phase-classes`. A data point's elementId is its UNS topic, e.g.
-pharmaco/chennai/upstream/suite-1/BR-101/pv/ph (pv = process value, sp = setpoint,
-lab = daily offline sample, state = batch/operation/phase, ai = model outputs). A batch
-(elementId like B2026-0142) has a value with its recipe, planned and actual levers,
-outcome and operation/phase timeline. Its children are its anomaly alerts, operator
-actions and yield recommendations. Use the batch's start and end as the history window
-for its data points.
+Genealogy. A batch's lot number is its batch id. An API batch Produced a lot; tablet
+batches Consumed it (with kg). Follow Produced / Consumed (and ProducedBy / ConsumedBy)
+from a batch or from `materials` to trace a tablet batch back to its API and forward.
+
+The address space. Browse roots: `pharmanextgen` (site > area > line > unit, and inside
+each unit its equipment modules, control modules, sensors and data points), `batches`,
+`recipes`, `phase-classes` and `materials`. A data point's elementId is its UNS topic,
+e.g. pharmanextgen/tuas/api/train-1/RX-201/pv/conversion (pv = process value, sp =
+setpoint, lab = offline sample or CoA, state = batch/operation/phase, ai = model
+outputs). A batch's value has its process, recipe, planned and actual levers, the units
+it ran on, its outcome and operation/phase timeline, and its lots. Its children are its
+anomaly alerts, operator actions and yield recommendations. Use the batch's start and
+end as the history window for its data points; a train batch is on each unit only for
+its own operations.
 
 AI outputs in the data are advisory: anomaly alerts (rules, stats, mspc, iforest layers;
-score against threshold), titer predictions (P10/P50/P90) and setpoint recommendations.
+score against threshold), yield predictions (target titer or yield; P10/P50/P90) and
+setpoint recommendations. A train batch's predictions and recommendations are published
+on the unit it started on (RX-201, BL-301).
 
 Time. Every timestamp is simulated plant time in UTC. It can be years away from today's
 date, so never compare it with the real clock. The user's message states the current
@@ -110,7 +129,7 @@ class Assistant:
 
     def plant_time(self) -> str:
         """The plant-time high-water mark: the timestamp of a static object's value."""
-        [result] = self.i3x.value(["pharmaco"])
+        [result] = self.i3x.value(["pharmanextgen"])
         return result["result"]["timestamp"]
 
     def ask(self, question: str, history: list[dict[str, Any]] | None = None) -> Answer:

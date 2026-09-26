@@ -75,10 +75,16 @@ def test_bulk_keeps_request_order_and_fails_unknown_ids_per_item(client):
 
 def test_objects_filters_and_metadata(client):
     roots = client.get("/v1/objects", params={"root": "true"}).json()["result"]
-    assert {o["elementId"] for o in roots} == {"pharmaco", "batches", "recipes", "phase-classes"}
+    assert {o["elementId"] for o in roots} == {
+        "pharmanextgen",
+        "batches",
+        "recipes",
+        "phase-classes",
+        "materials",
+    }
     assert all(o["parentId"] is None for o in roots)
     batches = client.get("/v1/objects", params={"typeElementId": "BatchType"}).json()["result"]
-    assert [b["elementId"] for b in batches] == ["B2026-0142", "B2026-0143"]
+    assert [b["elementId"] for b in batches] == ["B2026-0140", "B2026-0142", "B2026-0143"]
     meta = client.get("/v1/objects", params={"includeMetadata": "true"}).json()["result"]
     assert all(o["metadata"]["typeNamespaceUri"] == sp.NS_PHARMA for o in meta)
 

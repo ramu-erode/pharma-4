@@ -1,0 +1,37 @@
+# Recipe tab-v2: current Freiburg process (2026-). Shorter lubrication, softer
+# compaction and a slower turret with a matched feed frame: fewer rejects.
+# Read by the simulator (nominal levers, jitter) and graph-sync (PARs, spec limits).
+id: tab-v2
+process: osd
+name: Acetylsalicylic acid 500 mg tablets
+version: 2
+effective_from: 2026-06-01
+nominal:
+  lube_time: 3.0
+  roll_force: 7.0
+  comp_force: 15.0
+  turret_speed: 45.0
+  feed_frame: 32.0
+# Proven acceptable ranges: the optimizer's bounds. The same for every version.
+par:
+  lube_time: [2.0, 6.0]
+  roll_force: [4.0, 10.0]
+  comp_force: [10.0, 20.0]
+  turret_speed: [30.0, 60.0]
+  feed_frame: [20.0, 40.0]
+# Run-to-run standard deviation of each lever in manufacturing batches.
+jitter:
+  lube_time: 0.1
+  roll_force: 0.12
+  comp_force: 0.25
+  turret_speed: 0.8
+  feed_frame: 0.6
+# Spec limits on process values. `sp_relative` limits are offsets from the setpoint;
+# `operations` limits a check to the operations where the value is controlled.
+limits:
+  roll_force: {sp_relative: true, action: [-0.5, 0.5], alarm: [-1.0, 1.0], operations: [Compaction]}
+  comp_force: {sp_relative: true, action: [-1.5, 1.5], alarm: [-3.0, 3.0], operations: [Compression]}
+  tablet_weight: {sp_relative: false, action: [585.0, 615.0], alarm: [570.0, 630.0], operations: [Compression]}
+  weight_rsd: {sp_relative: false, action: [0.0, 2.5], alarm: [0.0, 4.0], operations: [Compression]}
+  ejection_force: {sp_relative: false, action: [0.0, 550.0], alarm: [0.0, 700.0], operations: [Compression]}
+  room_rh: {sp_relative: false, action: [0.0, 40.0], alarm: [0.0, 50.0]}

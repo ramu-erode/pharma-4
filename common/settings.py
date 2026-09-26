@@ -23,11 +23,6 @@ class Settings(BaseSettings):
 
     service: str = "dev"
 
-    # ISA-95 location of this POC (ADR-0001).
-    site: str = "chennai"
-    area: str = "upstream"
-    line: str = "suite-1"
-
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883
     mqtt_username: str | None = None
@@ -51,7 +46,11 @@ class Settings(BaseSettings):
     deadband_floor_s: float = 600.0
     heartbeat_wall_s: float = 30.0
 
-    backfill_batches: int = Field(default=200, ge=1)
+    # Historical batches per process (ADR-0010, ADR-0018). Batch ids are numbered across
+    # all of them, so the first live batch is B<year>-<total>.
+    backfill_batches: int = Field(default=200, ge=1)  # bioreactor (Grange Castle)
+    backfill_api_batches: int = Field(default=140, ge=0)  # aspirin API (Tuas)
+    backfill_osd_batches: int = Field(default=140, ge=0)  # aspirin tablets (Freiburg)
 
     models_dir: str = "models"  # trained models and their manifests (a volume in compose)
 
@@ -77,6 +76,10 @@ class Settings(BaseSettings):
             key = "MQTT_PASSWORD_" + service.upper().replace("-", "_")
             password = os.environ.get(key) or _dotenv_value(key)
         return username, password
+
+    @property
+    def backfill_total(self) -> int:
+        return self.backfill_batches + self.backfill_api_batches + self.backfill_osd_batches
 
     @property
     def postgres_dsn(self) -> str:

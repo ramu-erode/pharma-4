@@ -3,14 +3,15 @@
 Every topic string in the codebase comes from this module (CLAUDE.md). The tree is
 ISA-95 (ADR-0001):
 
-    pharmaco/<site>/<area>/<line>/<cell>/<class>/<name...>
+    pharmanextgen/<site>/<area>/<line>/<cell>/<class>/<name...>
 
 plus three branches with their own shapes:
 
-    pharmaco/_meta/tags/<cell>/<class>/<name>     tag metadata (edge adapter)
-    pharmaco/_meta/<service>/status               heartbeat + last-will (every service)
+    pharmanextgen/_meta/tags/<cell>/<class>/<name>     tag metadata (edge adapter)
+    pharmanextgen/_meta/<service>/status               heartbeat + last-will (every service)
     edge/raw/<device>/<raw tag>, edge/unmapped    outside the UNS (ADR-0005)
     _sim/cmd/<kind>, _sim/clock, _sim/faults/<cell>   outside the UNS (ADR-0012)
+    _sim/inventory, _sim/opening_stock          lot stock, simulation state (ADR-0020)
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-ENTERPRISE = "pharmaco"
+ENTERPRISE = "pharmanextgen"
 META = "_meta"
 EDGE = "edge"
 SIM = "_sim"
@@ -58,6 +59,8 @@ class TopicKind(StrEnum):
     SIM_CMD = "sim_cmd"
     SIM_CLOCK = "sim_clock"
     SIM_FAULTS = "sim_faults"
+    SIM_INVENTORY = "sim_inventory"
+    SIM_OPENING_STOCK = "sim_opening_stock"
 
 
 class TopicError(ValueError):
@@ -72,7 +75,7 @@ def _check(pattern: re.Pattern[str], value: str, what: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class UnitPath:
-    """The ISA-95 path of one unit (cell), e.g. chennai/upstream/suite-1/BR-101."""
+    """The ISA-95 path of one unit (cell), e.g. tuas/api/train-1/RX-201."""
 
     site: str
     area: str
@@ -192,6 +195,16 @@ def sim_faults(cell: str) -> str:
     return f"{SIM}/faults/{cell}"
 
 
+def sim_inventory() -> str:
+    """The simulator's lot stock (ADR-0020)."""
+    return f"{SIM}/inventory"
+
+
+def sim_opening_stock() -> str:
+    """The stock left at the end of backfilled history, published once by bootstrap."""
+    return f"{SIM}/opening_stock"
+
+
 # --- subscription patterns ------------------------------------------------------------
 
 
@@ -257,6 +270,10 @@ def parse(topic: str) -> ParsedTopic:
         elif parts[0] == SIM:
             if parts[1:] == ["clock"]:
                 return ParsedTopic(TopicKind.SIM_CLOCK)
+            if parts[1:] == ["inventory"]:
+                return ParsedTopic(TopicKind.SIM_INVENTORY)
+            if parts[1:] == ["opening_stock"]:
+                return ParsedTopic(TopicKind.SIM_OPENING_STOCK)
             if len(parts) == 3 and parts[1] == "cmd":
                 return ParsedTopic(TopicKind.SIM_CMD, command=SimCommand(parts[2]))
             if len(parts) == 3 and parts[1] == "faults" and sim_faults(parts[2]) == topic:
@@ -290,7 +307,13 @@ def delivery(topic: str) -> Delivery:
             if p.name.startswith("anomaly/alert/") or p.name == "yield/recommendation":
                 return Delivery(1, True)
             return Delivery(0, True)  # ai/anomaly/score, ai/yield/prediction
-        case TopicKind.META_TAG | TopicKind.META_STATUS | TopicKind.SIM_CLOCK:
+        case (
+            TopicKind.META_TAG
+            | TopicKind.META_STATUS
+            | TopicKind.SIM_CLOCK
+            | TopicKind.SIM_INVENTORY
+            | TopicKind.SIM_OPENING_STOCK
+        ):
             return Delivery(1, True)
         case TopicKind.EDGE_RAW:
             return Delivery(0, False)

@@ -1,28 +1,95 @@
-# The simulator's "DCS configuration": which raw tags each bioreactor exposes and which
-# simulator variable feeds them. Raw tag = <device>.<suffix>, device = BR101 / BR102.
+# The simulator's "DCS configuration": which raw tags each equipment class exposes and
+# which simulator variable feeds them. Raw tag = <device>.<suffix>, with the device from
+# the unit's cell (BR-101 -> BR101). The units themselves come from config/plant.yaml.
 #
 # This file and edge/tag-map.yaml are deliberately independent (ADR-0005, Q22): the tag
 # map is the commissioning artifact. tests/edge/test_tag_map.py checks every tag here is
 # mapped, except those listed in expected_unmapped.
-units: [BR-101, BR-102]
+classes:
+  bioreactor:
+    tags:
+      TIC-101.PV: temp
+      TIC-101.SP: temp_sp
+      AIC-102.PV: ph
+      AIC-102.SP: ph_sp
+      AIC-103.PV: do
+      AIC-103.SP: do_sp
+      SIC-104.PV: agitation
+      FQI-105.PV: feed_total
+      FIC-106.PV: air
+      FIC-107.PV: o2
+      FIC-108.PV: co2
+      FQI-109.PV: base_total
+      PIC-110.PV: pressure
+      WIT-111.PV: weight
+      TI-199.PV: spare_rtd
+    # A spare RTD wired to the DCS but never commissioned into the UNS. It keeps the
+    # edge/unmapped dead letter demonstrably in use.
+    expected_unmapped: [TI-199.PV]
 
-tags:
-  TIC-101.PV: temp
-  TIC-101.SP: temp_sp
-  AIC-102.PV: ph
-  AIC-102.SP: ph_sp
-  AIC-103.PV: do
-  AIC-103.SP: do_sp
-  SIC-104.PV: agitation
-  FQI-105.PV: feed_total
-  FIC-106.PV: air
-  FIC-107.PV: o2
-  FIC-108.PV: co2
-  FQI-109.PV: base_total
-  PIC-110.PV: pressure
-  WIT-111.PV: weight
-  TI-199.PV: spare_rtd
+  reactor:
+    tags:
+      TIC-201.PV: temp
+      TIC-201.SP: temp_sp
+      TI-202.PV: jacket
+      SIC-203.PV: agitation
+      SIC-203.SP: agitation_sp
+      JI-204.PV: power
+      FIC-205.PV: dose_flow
+      FIC-205.SP: dose_flow_sp
+      FQI-206.PV: dose_total
+      PIC-207.PV: pressure
+      LI-208.PV: level
+      AI-209.PV: conversion
+      AI-210.PV: chord
 
-# A spare RTD wired to the DCS but never commissioned into the UNS. It keeps the
-# edge/unmapped dead letter demonstrably in use.
-expected_unmapped: [TI-199.PV]
+  filter_dryer:
+    tags:
+      PIC-211.PV: filter_pressure
+      PIC-211.SP: filter_pressure_sp
+      FI-212.PV: filtrate_flow
+      FQI-213.PV: filtrate_total
+      TIC-214.PV: jacket
+      TIC-214.SP: jacket_sp
+      TI-215.PV: cake_temp
+      PIC-216.PV: vacuum
+      PIC-216.SP: vacuum_sp
+      SIC-217.PV: agitation
+      AI-218.PV: moisture
+
+  blender:
+    tags:
+      SIC-301.PV: speed
+      SIC-301.SP: speed_sp
+      NQI-302.PV: revolutions
+      AI-303.PV: blend_rsd
+      MI-304.PV: room_rh
+
+  roller_compactor:
+    tags:
+      PIC-311.PV: roll_force
+      PIC-311.SP: roll_force_sp
+      GIC-312.PV: roll_gap
+      SIC-313.PV: roll_speed
+      SIC-314.PV: screw_speed
+      SIC-315.PV: mill_speed
+      AI-316.PV: ribbon_density
+      WIT-317.PV: granule_mass
+      MI-318.PV: room_rh
+
+  tablet_press:
+    tags:
+      PIC-321.PV: comp_force
+      PIC-321.SP: comp_force_sp
+      PI-322.PV: precomp_force
+      SIC-323.PV: turret_speed
+      SIC-323.SP: turret_speed_sp
+      SIC-324.PV: feed_frame
+      SIC-324.SP: feed_frame_sp
+      PI-325.PV: ejection_force
+      WI-326.PV: tablet_weight
+      AI-327.PV: weight_rsd
+      XI-328.PV: hardness
+      FQI-329.PV: tablets_total
+      FQI-330.PV: rejects_total
+      MI-331.PV: room_rh

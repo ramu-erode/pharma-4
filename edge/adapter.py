@@ -70,7 +70,7 @@ def to_payload(m: Mapped) -> models.ScalarPayload:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     s = get_settings()
-    tag_map = TagMap.load(s.site, s.area, s.line)
+    tag_map = TagMap.load()
     deadband = Deadband(s.deadband_floor_s, s.publish_period_s)
     client = connect(SERVICE, Src.EDGE, s)
     EdgeAdapter(client, tag_map, deadband).start()

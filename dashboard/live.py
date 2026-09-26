@@ -15,7 +15,13 @@ from common.mqtt import UnsClient
 from common.settings import Settings
 from common.uns import SimCommand
 
-SUBSCRIPTIONS = (uns.SUB_UNS_ALL, "edge/#", uns.sim_clock(), uns.SUB_SIM_FAULTS)
+SUBSCRIPTIONS = (
+    uns.SUB_UNS_ALL,
+    "edge/#",
+    uns.sim_clock(),
+    uns.SUB_SIM_FAULTS,
+    uns.sim_inventory(),  # Freiburg's API stock (ADR-0020)
+)
 
 
 class LiveState:

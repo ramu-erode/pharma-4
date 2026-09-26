@@ -24,7 +24,14 @@ def test_db():
     except psycopg.OperationalError:
         pytest.skip("TimescaleDB is not running")
     admin.execute(f'CREATE DATABASE "{name}"')
-    settings = base.model_copy(update={"postgres_db": name, "backfill_batches": 3})
+    settings = base.model_copy(
+        update={
+            "postgres_db": name,
+            "backfill_batches": 3,
+            "backfill_api_batches": 3,
+            "backfill_osd_batches": 3,
+        }
+    )
     try:
         yield settings
     finally:
@@ -43,12 +50,25 @@ def test_backfill_writes_history_and_second_run_is_a_noop(test_db):
     with connect(test_db.postgres_dsn) as conn:
         migrate(conn)
         results = backfill.run(conn, test_db)
-        assert results is not None and len(results) == 3
+        assert results is not None and len(results) == 9
+        assert {r.process for r in results} == {"bioreactor", "api", "osd"}
         first = counts(conn)
         assert first["tag_values"] == sum(r.tag_rows for r in results)
-        assert first["uns_events"] > 3 * 50
-        ids = {r[0] for r in conn.execute("SELECT DISTINCT batch_id FROM tag_values")}
+        assert first["uns_events"] > 9 * 30
+        ids = {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT batch_id FROM tag_values WHERE batch_id IS NOT NULL"
+            )
+        }
         assert ids == {r.batch_id for r in results}
+        # ids run across every site in start order; tablet batches drew on API lots
+        assert sorted(r.batch_id[-4:] for r in results) == [f"{i:04d}" for i in range(9)]
+        consumed = conn.execute(
+            "SELECT count(*) FROM uns_events WHERE payload -> 'v' ->> 'kind' = 'MATERIAL_CONSUMED'"
+        ).fetchone()[0]
+        assert consumed >= 3
+        assert backfill.get_state(conn, "opening_stock")["site"] == "freiburg"
 
         assert backfill.run(conn, test_db) is None  # complete: skipped
         assert counts(conn) == first

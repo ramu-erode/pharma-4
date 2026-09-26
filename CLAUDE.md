@@ -4,22 +4,32 @@ Guidance for Claude Code working in this repository.
 
 ## What this project is
 
-**pharma-4** is a proof of concept for Pharma 4.0 data architecture. It simulates a
-biopharmaceutical fed-batch bioreactor (CHO cell culture producing a monoclonal
-antibody), publishes its data into a **Unified Namespace** over MQTT, models the
-context in a **Neo4j knowledge graph**, and runs two AI use cases on top:
+**pharma-4** is a proof of concept for Pharma 4.0 data architecture. It simulates
+**PharmaNextGen**, a fictitious manufacturer with three sites (ADR-0018):
+
+- **Grange Castle** (Dublin): two fed-batch bioreactors, CHO cells making a monoclonal
+  antibody.
+- **Tuas** (Singapore): aspirin API, through a reactor-crystallizer and a filter-dryer.
+- **Freiburg**: aspirin 500 mg tablets from Tuas API, through a blender, a roller
+  compactor and a tablet press.
+
+It publishes their data into one **Unified Namespace** over MQTT, models the context
+and the material genealogy between sites in a **Neo4j knowledge graph**, and runs two
+AI use cases on top:
 
 1. **Anomaly detection** — catch developing equipment and process faults before they
-   breach spec.
-2. **Yield optimization** — predict final titer mid-batch and recommend setpoints
-   inside the validated design space.
+   breach spec (one model per equipment class).
+2. **Yield optimization** — predict the batch outcome (titer, API yield, tablet yield)
+   mid-batch and recommend setpoints inside the validated design space (one model per
+   process).
 
 It is a demo and learning vehicle, not a GMP system. Nothing here is validated, and
 the AI output is advisory only.
 
 ## Architecture in one paragraph
 
-The simulator emits raw DCS-style tags (`BR101.AIC-102.PV`) to `edge/raw/#`. The
+The simulator emits raw DCS-style tags (`BR101.AIC-102.PV`) to `edge/raw/#` for every
+unit of every site; an API or tablet batch moves through the units of its train. The
 **edge adapter** maps them into the ISA-95 UNS topic tree, adds unit, batch id and
 quality, applies a deadband, and republishes. Everything else subscribes to the
 broker: the **historian** writes to TimescaleDB, **graph-sync** maintains Neo4j,
@@ -34,13 +44,13 @@ Full design: `docs/architecture.md` and the ADRs in `docs/adr/`.
 ## Repository layout
 
 ```
-config/      plant.yaml: hierarchy, modules, phase classes, bindings (FHX stand-in)
-common/      Shared UNS topic builder, pydantic payload models, MQTT helpers
-simulator/   True process state, sensor model, control, faults, clock, ctl, backfill
+config/      plant.yaml: enterprise, sites, lines, units; modules and bindings per class
+common/      UNS topic builder, payload models, MQTT helpers, plant.py (the plant model)
+simulator/   Bioreactor engine, api/ and osd/ train engines, clock, ctl, backfill
 edge/        Edge adapter: tag map, context enrichment, deadband
 historian/   TimescaleDB writer and SQL migrations
 graph/       Neo4j sync, attribution projection, schema.cypher, recipes
-ai/          features.py, anomaly/ and yield_/ services, plus training entry points
+ai/          profiles.py, features.py, anomaly/ and yield_/ services, training
 bootstrap/   One-shot, idempotent first-start: migrations, backfill, training
 i3x/         i3X 1.0 read API: address space, values, subscriptions, FastAPI app
 assistant/   LLM Q&A through i3X only: i3X client, tools, tool loop, CLI
@@ -60,11 +70,12 @@ tests/       pytest suites mirroring the package layout
 **UNS topics**
 
 - Never hand-build a topic string. Use the builder in `common/uns.py`.
-- Topic tree: `pharmaco/<site>/<area>/<line>/<cell>/<class>/<name>`.
+- Topic tree: `pharmanextgen/<site>/<area>/<line>/<cell>/<class>/<name>`.
 - Only the owning service publishes to a branch. The edge adapter owns `pv/*`,
   `sp/*` and `_meta/tags`; the simulator owns `lab/*`, `state/*`, `events/*`,
-  `edge/raw` and `_sim/clock|faults`; the AI services own `ai/*`; the dashboard may
-  write only `_sim/cmd/#`. Every service owns its own `_meta/<service>/status`.
+  `edge/raw` and `_sim/clock|faults|inventory`; bootstrap may write only
+  `_sim/opening_stock`; the AI services own `ai/*`; the dashboard may write only
+  `_sim/cmd/#`. Every service owns its own `_meta/<service>/status`.
   Respect the Mosquitto ACL — if a publish needs a new branch, update the ACL in the
   same change.
 - Every payload carries `v`, `ts` (UTC ISO-8601), `unit`, `q`, `batch`, `src`. `ts`
@@ -84,10 +95,15 @@ tests/       pytest suites mirroring the package layout
 
 **Naming**
 
-- Equipment ids are `BR-101` style in the UNS and graph; raw DCS tags keep their
-  native `BR101.AIC-102.PV` form and only appear in `edge/raw` and the tag map.
-- Batch ids are `B<start year>-<global 4-digit seq>`, e.g. `B2026-0142`. The sequence
-  never resets; the first live batch is `B2026-0200`.
+- Sites are `grange-castle`, `tuas`, `freiburg`. Equipment ids are `BR-101` style in
+  the UNS and graph; raw DCS tags keep their native `BR101.AIC-102.PV` form and only
+  appear in `edge/raw` and the tag map.
+- Batch ids are `B<start year>-<global 4-digit seq>`, e.g. `B2026-0142`, issued across
+  all sites as an ERP would. The sequence never resets; with the default history (200 +
+  140 + 140 batches) the first live batch is `B2026-0480`. A lot's id is the id of the
+  batch that made it (ADR-0020).
+- Operation names are unique within a process, so `<batch>/<operation>` is a key even
+  for a batch that runs on several units.
 
 ## Working practices
 
@@ -97,7 +113,11 @@ tests/       pytest suites mirroring the package layout
 - **One concern per service.** Resist adding logic to the edge adapter; it maps and
   enriches, nothing more.
 - **Tests alongside behaviour.** Every fault type in the simulator needs a test that
-  asserts the anomaly layer catches it. Every tag-map change needs a mapping test.
+  asserts the anomaly layer catches it (`tests/ai/test_fault_harness*.py`). Every
+  tag-map change needs a mapping test.
+- **A new equipment class** needs its modules and bindings in `config/plant.yaml`, its
+  tags in both `edge/tag-map.yaml` and `simulator/dcs_tags.yaml`, and (if scored) an
+  anomaly profile in `ai/profiles.py` with harness cases (ADR-0021).
 - Keep the whole stack runnable with `docker compose up`. If a change needs manual
   setup steps, it is not done. The one-shot `bootstrap` service handles migrations,
   backfill and training (ADR-0010).
@@ -109,12 +129,12 @@ tests/       pytest suites mirroring the package layout
 ```bash
 docker compose up -d              # bring up everything; the dashboard is on http://localhost:8501
 docker compose logs -f simulator  # follow one service
-python -m simulator.backfill      # re-generate the 200 historical batches (bootstrap does this on first up)
+python -m simulator.backfill      # re-generate the 480 historical batches, all sites (bootstrap does this)
 python -m ai.train_all            # re-train anomaly and yield models (bootstrap does this on first up)
 python -m ai.anomaly.evaluate     # anomaly model vs ground-truth labels (writes models/anomaly_eval.json)
 python -m ai.yield_.evaluate      # optimizer vs the simulator's true titer (writes models/yield_eval.json)
 python -m graph.replay [--all]    # rebuild the graph from the historian
-python -m simulator.ctl --help    # demo control: start batch, inject fault, speed, run to day N
+python -m simulator.ctl --help    # demo control: start batch (BR-101, RX-201, BL-301), inject fault, speed
 pytest                            # run the test suite (fault harness is marked slow)
 pytest -m compose                 # smoke-test against the running stack
 python -m assistant "question"    # ask the plant via i3X (needs ANTHROPIC_API_KEY in .env)
@@ -126,6 +146,15 @@ ruff check . && ruff format .     # lint and format
 
 - A **fed-batch** run lasts about 14 days: growth phase, a temperature shift around
   day 5, then production, then harvest. Titer (g/L) is the yield metric.
+- An **aspirin API** batch (about 30 h) acetylates salicylic acid, crystallises by
+  cooling, then filters, washes and dries. Yield (%) and the CoA (free SA ≤ 0.10%) are
+  the outcome; reaction temperature, anhydride ratio, hold time, cooling rate and dryer
+  temperature are the levers.
+- An **aspirin tablet** batch (about 9 h) is dry-granulated because aspirin
+  hydrolyses: blend, roller-compact, compress. Tablet yield (%) and the CoA
+  (dissolution ≥ 80% at 30 min) are the outcome; lubrication time, roll force,
+  compression force, turret and feed-frame speed are the levers. API particle size from
+  Tuas drives dissolution at Freiburg, which is why genealogy matters.
 - The **temperature shift day**, **pH band**, **DO stability** and **feed timing** are
   the real levers on titer. They are the optimizer's decision variables.
 - **Operations are sequential; phases run in parallel.** `state/operation` is one value

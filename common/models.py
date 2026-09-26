@@ -99,15 +99,31 @@ class Payload[V](_Model):
 
 
 class Operation(StrEnum):
-    """Sequential ISA-88 operations (ADR-0011). IDLE means no batch on the unit."""
+    """Sequential ISA-88 operations, per unit (ADR-0011, ADR-0018). IDLE means no batch
+    on the unit. Names are unique within a process, so `<batch>/<operation>` is a key."""
 
     IDLE = "Idle"
+    # bioreactor
     SETUP = "Setup"
     INOCULATION = "Inoculation"
     GROWTH = "Growth"
     TEMP_SHIFT = "TempShift"
     PRODUCTION = "Production"
     HARVEST = "Harvest"
+    # API: reactor-crystallizer, then filter-dryer (ADR-0019)
+    CHARGE = "Charge"
+    REACTION = "Reaction"
+    CRYSTALLIZATION = "Crystallization"
+    TRANSFER = "Transfer"
+    FILTRATION = "Filtration"
+    WASHING = "Washing"
+    DRYING = "Drying"
+    DISCHARGE = "Discharge"
+    # OSD: blender (Charge, ..., Discharge), roller compactor, tablet press
+    BLENDING = "Blending"
+    LUBRICATION = "Lubrication"
+    COMPACTION = "Compaction"
+    COMPRESSION = "Compression"
 
 
 class PhaseClass(StrEnum):
@@ -117,6 +133,15 @@ class PhaseClass(StrEnum):
     PH_CTRL = "PH_CTRL"
     DO_CTRL = "DO_CTRL"
     FEED_ADD = "FEED_ADD"
+    AGIT_CTRL = "AGIT_CTRL"
+    DOSE_ADD = "DOSE_ADD"
+    FILTER_CTRL = "FILTER_CTRL"
+    VAC_CTRL = "VAC_CTRL"
+    BLEND_CTRL = "BLEND_CTRL"
+    COMPACT_CTRL = "COMPACT_CTRL"
+    MILL_CTRL = "MILL_CTRL"
+    TABLET_CTRL = "TABLET_CTRL"
+    FEED_CTRL = "FEED_CTRL"
 
 
 class PhaseState(StrEnum):
@@ -144,6 +169,17 @@ class FaultType(StrEnum):
     FEED_PUMP_FAILURE = "feed_pump_failure"
     STUCK_SENSOR = "stuck_sensor"
     CONTAMINATION = "contamination"
+    # API (ADR-0019)
+    JACKET_FOULING = "jacket_fouling"
+    DOSING_METER_DRIFT = "dosing_meter_drift"
+    AGITATOR_DEGRADATION = "agitator_degradation"
+    FILTER_BLINDING = "filter_blinding"
+    VACUUM_LEAK = "vacuum_leak"
+    # OSD (ADR-0019)
+    ROLL_FORCE_DRIFT = "roll_force_drift"
+    PUNCH_STICKING = "punch_sticking"
+    HOPPER_BRIDGING = "hopper_bridging"
+    HVAC_HUMIDITY = "hvac_humidity"
 
 
 class TagKind(StrEnum):
@@ -155,7 +191,7 @@ class TagKind(StrEnum):
 
 
 class Levers(_Model):
-    """The optimizer's decision variables (architecture: setpoint optimization)."""
+    """The bioreactor optimizer's decision variables (architecture: setpoint optimization)."""
 
     shift_day: float = Field(ge=0)
     prod_temp: float
@@ -164,12 +200,38 @@ class Levers(_Model):
     feed_mult: float = Field(gt=0)
 
 
+class ApiLevers(_Model):
+    """Aspirin API levers (ADR-0019)."""
+
+    rxn_temp: float  # °C, reaction hold
+    ac2o_ratio: float = Field(gt=0)  # mol acetic anhydride per mol salicylic acid
+    rxn_time: float = Field(gt=0)  # h, hold after dosing
+    cool_rate: float = Field(gt=0)  # °C/h, crystallisation ramp
+    dry_temp: float  # °C, dryer jacket
+
+
+class OsdLevers(_Model):
+    """Aspirin tablet levers (ADR-0019)."""
+
+    lube_time: float = Field(gt=0)  # min, blending with stearic acid
+    roll_force: float = Field(gt=0)  # kN/cm, specific roll force
+    comp_force: float = Field(gt=0)  # kN, main compression force
+    turret_speed: float = Field(gt=0)  # rpm
+    feed_frame: float = Field(gt=0)  # rpm
+
+
+# Each process's levers; the field sets are disjoint, so the union validates unambiguously.
+AnyLevers = Levers | ApiLevers | OsdLevers
+LEVER_MODELS: dict[str, type[_Model]] = {"bioreactor": Levers, "api": ApiLevers, "osd": OsdLevers}
+
+
 class BatchStarted(_Model):
     kind: Literal["BATCH_START"] = "BATCH_START"
     batch_id: BatchId
     recipe: str
     campaign: Campaign
-    planned_levers: Levers
+    planned_levers: AnyLevers
+    process: Literal["bioreactor", "api", "osd"] = "bioreactor"
 
 
 class OperationChanged(_Model):
@@ -192,11 +254,36 @@ class BatchEnded(_Model):
     batch_id: BatchId
     status: BatchStatus
     reason: str | None = None
+    # From the CoA, where the process has one (ADR-0019); None: rejected only if aborted.
+    disposition: Literal["ACCEPTED", "REJECTED"] | None = None
 
 
 BatchEvent = Annotated[
     BatchStarted | OperationChanged | PhaseChanged | BatchEnded, Field(discriminator="kind")
 ]
+
+
+class MaterialProduced(_Model):
+    """A batch put a lot into stock (ADR-0020). The lot id is the batch id."""
+
+    kind: Literal["MATERIAL_PRODUCED"] = "MATERIAL_PRODUCED"
+    batch_id: BatchId
+    lot: BatchId
+    material: str
+    quantity_kg: float = Field(ge=0)
+
+
+class MaterialConsumed(_Model):
+    """A batch drew on a lot (ADR-0020)."""
+
+    kind: Literal["MATERIAL_CONSUMED"] = "MATERIAL_CONSUMED"
+    batch_id: BatchId
+    lot: BatchId
+    material: str
+    quantity_kg: float = Field(gt=0)
+
+
+MaterialEvent = Annotated[MaterialProduced | MaterialConsumed, Field(discriminator="kind")]
 
 
 class OperatorEvent(_Model):
@@ -229,7 +316,12 @@ class Quantiles(_Model):
 
 
 class Prediction(_Model):
-    titer: Quantiles
+    """ai/yield/prediction (ADR-0021): the process's target, e.g. titer or api_yield.
+    `batch_day` counts from the batch's alignment reference (inoculation for the
+    bioreactor, batch start otherwise)."""
+
+    target: str
+    value: Quantiles
     batch_day: float
     model_version: str
 
@@ -242,6 +334,7 @@ class LeverAdvice(_Model):
 
 class Recommendation(_Model):
     id: str
+    target: str
     levers: dict[str, LeverAdvice]
     predicted_current: Quantiles
     predicted_recommended: Quantiles
@@ -291,15 +384,33 @@ class ClockStatus(_Model):
     last_batch_seq: int | None = None
 
 
+class LotStock(_Model):
+    """One lot in a site's stock (ADR-0020). `properties` are its *true* attributes,
+    which drive the process that consumes it; they live only under `_sim`."""
+
+    lot: BatchId
+    material: str
+    quantity_kg: float = Field(ge=0)
+    released: UtcDatetime
+    properties: dict[str, float] = Field(default_factory=dict)
+
+
+class Inventory(_Model):
+    """`_sim/inventory` and `_sim/opening_stock`, retained: Freiburg's API stock."""
+
+    site: str
+    lots: list[LotStock] = Field(default_factory=list)
+
+
 # --- _sim/cmd ---------------------------------------------------------------------------
 
 
 class BatchCommand(_Model):
     action: Literal["start", "abort"]
-    cell: str
+    cell: str  # a train's batch starts on its first unit
     recipe: str | None = None
     campaign: Campaign = Campaign.MFG
-    levers: Levers | None = None  # overrides the recipe's nominal levers
+    levers: AnyLevers | None = None  # overrides the recipe's nominal levers
 
 
 class FaultCommand(_Model):
@@ -347,6 +458,7 @@ BatchStatePayload = Payload[BatchId | None]
 OperationPayload = Payload[Operation]
 PhaseStatePayload = Payload[PhaseState]
 BatchEventPayload = Payload[BatchEvent]
+MaterialEventPayload = Payload[MaterialEvent]
 OperatorEventPayload = Payload[OperatorEvent]
 AlertPayload = Payload[Alert]
 PredictionPayload = Payload[Prediction]
@@ -355,6 +467,7 @@ TagMetaPayload = Payload[TagMeta]
 HeartbeatPayload = Payload[Heartbeat]
 FaultLabelPayload = Payload[FaultLabel]
 ClockStatusPayload = Payload[ClockStatus]
+InventoryPayload = Payload[Inventory]
 
 SIM_COMMAND_MODELS: dict[SimCommand, type[BaseModel]] = {
     SimCommand.BATCH: Payload[BatchCommand],
@@ -389,6 +502,8 @@ def model_for(topic: str) -> type[BaseModel]:
                     return BatchEventPayload
                 if name == "operator":
                     return OperatorEventPayload
+                if name == "material":
+                    return MaterialEventPayload
             if p.cls is TopicClass.AI:
                 if name == "anomaly/score":
                     return ScalarPayload
@@ -411,6 +526,8 @@ def model_for(topic: str) -> type[BaseModel]:
             return SIM_COMMAND_MODELS[p.command]
         case TopicKind.SIM_CLOCK:
             return ClockStatusPayload
+        case TopicKind.SIM_INVENTORY | TopicKind.SIM_OPENING_STOCK:
+            return InventoryPayload
         case TopicKind.SIM_FAULTS:
             return FaultLabelPayload
     raise UnknownTopicError(topic)

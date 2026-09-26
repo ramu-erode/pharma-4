@@ -7,7 +7,7 @@ from edge.core import Deadband, Mapped, TagMap, Unmapped, map_and_enrich
 from simulator.engine import BatchRun, RawOut
 from tests.simulator.conftest import make_spec
 
-TAG_MAP = TagMap.load("chennai", "upstream", "suite-1")
+TAG_MAP = TagMap.load()
 T0 = datetime(2026, 9, 24, tzinfo=UTC)
 BATCHES = {"BR-101": "B2026-0200", "BR-102": None}
 

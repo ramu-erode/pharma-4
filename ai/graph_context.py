@@ -17,7 +17,8 @@ log = logging.getLogger(__name__)
 
 LIMITS = """
 MATCH (:Batch {id: $batch})-[:FOLLOWS]->(:Recipe)-[:HAS_LIMIT]->(l:SpecLimit {type: 'action'})
-RETURN l.parameter AS name, l.low AS low, l.high AS high, l.sp_relative AS rel
+RETURN l.parameter AS name, l.low AS low, l.high AS high, l.sp_relative AS rel,
+       l.operations AS ops
 """
 
 CONTROLLED = """
@@ -28,7 +29,7 @@ RETURN pc.name AS phase, collect(DISTINCT t.name) AS signals
 
 
 def batch_context(
-    driver: Driver | None, batch_id: str, cell: str, recipe_id: str
+    driver: Driver | None, batch_id: str, cell: str, recipe_id: str, cls: str = "bioreactor"
 ) -> tuple[dict[str, Limit], dict[str, set[str]]]:
     if driver is not None:
         try:
@@ -36,11 +37,16 @@ def batch_context(
             ctrl_rec, _, _ = driver.execute_query(CONTROLLED, cell=cell)
             if limits_rec and ctrl_rec:
                 limits = {
-                    r["name"]: Limit(bool(r["rel"]), float(r["low"]), float(r["high"]))
+                    r["name"]: Limit(
+                        bool(r["rel"]),
+                        float(r["low"]),
+                        float(r["high"]),
+                        tuple(r["ops"]) if r["ops"] else None,
+                    )
                     for r in limits_rec
                 }
                 controlled = {r["phase"]: set(r["signals"]) for r in ctrl_rec}
                 return limits, controlled
         except (Neo4jError, ServiceUnavailable):
             log.warning("graph unavailable; using configuration for %s", batch_id)
-    return limits_for(recipe_id), controlled_by_config()
+    return limits_for(recipe_id), controlled_by_config(cls)

@@ -1,6 +1,6 @@
 # ADR-0011: Sequential operations, parallel phases, and a projected attribution table
 
-Status: Accepted
+Status: Accepted; amended by ADR-0018
 Date: 2026-09-23
 Refines: ADR-0006 (does not change its decision)
 

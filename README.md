@@ -1,9 +1,18 @@
 # pharma-4
 
-A proof of concept for Pharma 4.0 data architecture. A simulated CHO fed-batch
-bioreactor publishes into an MQTT **Unified Namespace**. A **Neo4j knowledge graph**
-holds the context. Two AI services, **anomaly detection** and **yield
-optimization**, publish their results back into the namespace. An **i3X 1.0** API
+A proof of concept for Pharma 4.0 data architecture, set in **PharmaNextGen**, a
+fictitious manufacturer with three simulated sites:
+
+| Site | Makes | Units |
+| --- | --- | --- |
+| Grange Castle, Dublin | Monoclonal antibody (CHO fed-batch) | BR-101, BR-102 bioreactors |
+| Tuas, Singapore | Aspirin API | RX-201 reactor-crystallizer → FD-202 filter-dryer |
+| Freiburg, Germany | Aspirin 500 mg tablets, from Tuas API | BL-301 blender → RC-302 roller compactor → TP-303 tablet press |
+
+Every unit publishes into one MQTT **Unified Namespace**. A **Neo4j knowledge graph**
+holds the context, including which Tuas lots went into which Freiburg batches. Two AI
+services, **anomaly detection** and **yield optimization**, publish their results
+back into the namespace. An **i3X 1.0** API
 serves the whole plant through CESMII's open standard, and an **LLM assistant**
 answers questions by reading only that API. The AI output is advisory only. Nothing
 here is validated.
@@ -14,18 +23,21 @@ here is validated.
 docker compose up -d
 ```
 
-The first start takes about three minutes. A one-shot `bootstrap` service:
+The first start takes about seven minutes. A one-shot `bootstrap` service:
 
 - applies the database schemas;
-- generates 200 historical batches (2022–2026);
+- generates 480 historical batches: 200 bioreactor (2022–2026), 140 API and 140
+  tablet batches (2025–2026), with the tablet batches drawing on the API lots;
+- hands the API stock left at Freiburg to the live simulator;
 - builds the graph;
 - trains the models and writes their evaluation reports.
 
 Later starts skip whatever is already done.
 
 Open the dashboard at <http://localhost:8501>. From the **Demo** sidebar you can
-start a batch, change the speed, run it to a given day, inject a fault, and change a
-setpoint the way an operator would.
+pick a site, start a batch, change the speed, run it to a given day or hour, inject a
+fault, and change a setpoint the way an operator would. The **Graph** page traces a
+tablet batch back to the API lots it used.
 
 The same controls work from a terminal:
 
@@ -33,8 +45,14 @@ The same controls work from a terminal:
 python -m simulator.ctl start-batch BR-101
 python -m simulator.ctl run-to-day BR-101 2.3
 python -m simulator.ctl inject BR-101 ph_probe_drift
-python -m simulator.ctl run-to-day BR-101 4
+python -m simulator.ctl start-batch RX-201              # an aspirin API batch at Tuas
+python -m simulator.ctl inject RX-201 jacket_fouling
+python -m simulator.ctl start-batch BL-301              # tablets at Freiburg, from Tuas lots
 ```
+
+**Upgrading a stack from before the three sites.** The topic root changed from
+`pharmaco/` to `pharmanextgen/`, so old volumes cannot be reused. Rebuild once:
+`docker compose down -v && docker compose up -d`.
 
 To watch the namespace itself, point MQTT Explorer at `localhost:1883`. Use the
 read-only user `explorer`; its password is in `.env.example`.
@@ -50,7 +68,7 @@ bearer token.
 curl localhost:8600/v1/info
 curl -H "X-API-Key: dev-i3x-key" -X POST localhost:8600/v1/objects/value \
   -H "Content-Type: application/json" \
-  -d '{"elementIds": ["pharmaco/chennai/upstream/suite-1/BR-101"], "maxDepth": 0}'
+  -d '{"elementIds": ["pharmanextgen/grange-castle/upstream/suite-1/BR-101"], "maxDepth": 0}'
 ```
 
 A data point's elementId is its UNS topic. Timestamps are simulated plant time.
@@ -82,7 +100,7 @@ Put your key in `.env`, never in `.env.example`:
 ```bash
 echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
 docker compose up -d dashboard          # the Ask page picks up the key
-python -m assistant "Why is the predicted titer of the batch on BR-101 falling?"
+python -m assistant "Which Tuas lots went into the latest Freiburg batch, and how did they run?"
 ```
 
 Each answer lists the i3X calls it made. Without a key, the rest of the stack runs as
@@ -100,6 +118,6 @@ usual and the Ask page explains what is missing.
 
 ```bash
 pip install -r requirements-dev.txt && pip install -e .
-pytest              # unit tests and the in-process fault harness (~2 min)
+pytest              # unit tests and the in-process fault harnesses (~3 min)
 pytest -m compose   # against the running stack
 ```

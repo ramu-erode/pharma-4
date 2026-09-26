@@ -6,8 +6,10 @@ ADR-0013, ADR-0015). Pure: no MQTT, no databases.
 - Layer 2, stats: EWMA of each aligned feature, per operation.
 - Layer 3, multivariate: PCA T² and SPE, and Isolation Forest, on aligned features.
 
-Layers 2-3 only score Growth and Production, stay quiet through TempShift and its
-settling time, and ignore signals whose controlling phase is HELD. Layer 1 always runs.
+Layers 2-3 only score the profile's operations (the bioreactor: Growth and Production),
+stay quiet while settling (TempShift; off the bioreactor, the first window of each
+operation), and ignore signals whose controlling phase is HELD. Layer 1 always runs.
+Everything class-specific comes from the model's profile (ADR-0021).
 
 Scores become alerts through `AlertManager`: open after 2 windows over threshold, clear
 after 4 under, one lifecycle per key.
@@ -20,19 +22,15 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ai.anomaly.model import AnomalyModel
-from ai.context import SCORED_OPERATIONS
-from ai.features import FEATURE_TAG, FEATURES
+from ai.profiles import BIOREACTOR, AnomalyProfile
 from common.models import FaultType
 
 EWMA_LAMBDA = 0.2
 OPEN_AFTER = 2
 CLEAR_AFTER = 4
-ROC_LIMIT = 1.5  # °C/h outside TempShift
-STATS_FEATURES = (
-    "temp_err_mean", "temp_err_std", "ph_err_mean", "do_err_mean", "agitation_mean",
-    "o2_mean", "co2_mean", "base_rate", "hours_since_bolus", "pressure_mean", "weight_slope",
-)  # fmt: skip
-_F = {f: i for i, f in enumerate(FEATURES)}
+ROC_LIMIT = BIOREACTOR.roc.limit if BIOREACTOR.roc else 1.5  # °C/h outside TempShift
+STATS_FEATURES = BIOREACTOR.stats_features
+LIMIT_FEATURES = BIOREACTOR.limit_features
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,15 +38,7 @@ class Limit:
     sp_relative: bool
     low: float
     high: float
-
-
-# Rule inputs: feature for the window mean and the signal's name.
-LIMIT_FEATURES = {
-    "temperature": "temp_err_mean",
-    "ph": "ph_err_mean",
-    "do": "do_err_mean",
-    "pressure": "pressure_mean",
-}
+    operations: tuple[str, ...] | None = None  # None: every operation
 
 
 # --- per-window inputs ------------------------------------------------------------------------
@@ -81,11 +71,13 @@ class Channels:
 
 
 def score_channels(model: AnomalyModel, windows: list[Window]) -> Channels:
-    n, k = len(windows), len(FEATURES)
+    profile = model.profile
+    fi = profile.feature_index
+    n, k = len(windows), len(profile.features)
     z = np.full((n, k), np.nan)
     t2, spe, iff = np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan)
     contrib = np.zeros((n, k))
-    for op in SCORED_OPERATIONS:
+    for op in profile.scored_ops:
         rows = [
             i
             for i, w in enumerate(windows)
@@ -100,9 +92,9 @@ def score_channels(model: AnomalyModel, windows: list[Window]) -> Channels:
         ages = np.array([windows[i].age_h for i in rows])
         Z = model.scaler.transform(op, ages, X)
         for j, i in enumerate(rows):  # neutralise features of held loops
-            for f, tag in FEATURE_TAG.items():
+            for f, tag in profile.feature_tag.items():
                 if tag in windows[i].held_signals:
-                    Z[j, _F[f]] = 0.0
+                    Z[j, fi[f]] = 0.0
         m = model.ops[op]
         z[rows] = Z
         t2[rows] = m.t2(Z)
@@ -199,6 +191,7 @@ class Detector:
 
     def __post_init__(self) -> None:
         self.alerts = AlertManager(self.batch_id)
+        self.profile: AnomalyProfile = self.model.profile
 
     def step(
         self, w: Window, ch: Channels, i: int
@@ -207,7 +200,9 @@ class Detector:
         fired: dict[str, Evidence] = {}
         raw: dict[str, float] = {}
         self._rules(w, fired)
-        scored = w.operation in SCORED_OPERATIONS and not w.settling and not np.isnan(ch.t2[i])
+        scored = (
+            w.operation in self.profile.scored_ops and not w.settling and not np.isnan(ch.t2[i])
+        )
         if w.operation != self.last_op or not scored:
             self.ewma.clear()
         self.last_op = w.operation
@@ -228,13 +223,16 @@ class Detector:
             fired[f"rules-stuck_{s}"] = Evidence("rules", 3.0, 3.0, [s], FaultType.STUCK_SENSOR)
         for s in w.uncertain:
             fired[f"rules-quality_{s}"] = Evidence("rules", 1.0, 1.0, [s], None)
-        if w.operation is None or w.operation in ("Setup", "Harvest"):
+        profile, fi = self.profile, self.profile.feature_index
+        if w.operation is None or w.operation in profile.rules_skip_ops:
             return
-        for sig, feat in LIMIT_FEATURES.items():
+        for sig, feat in profile.limit_features.items():
             lim = self.limits.get(sig)
-            if lim is None:
+            if lim is None or (lim.operations and w.operation not in lim.operations):
                 continue
-            err = float(w.x[_F[feat]])
+            if profile.settle_new_operation and w.settling:
+                continue  # the window still holds the previous operation's values
+            err = float(w.x[fi[feat]])
             value = err if lim.sp_relative else err + w.sp.get(sig, 0.0)
             if not lim.low <= value <= lim.high:
                 bound = lim.low if value < lim.low else lim.high
@@ -242,28 +240,27 @@ class Detector:
                 fired[f"rules-limit_{sig}"] = Evidence(
                     "rules", value, bound, [sig], None, 1.0 + abs(value - bound) / span
                 )
-        slope = float(w.x[_F["temp_slope"]])
-        if w.operation != "TempShift" and not w.settling and abs(slope) > ROC_LIMIT:
-            fired["rules-roc_temperature"] = Evidence(
-                "rules",
-                abs(slope),
-                ROC_LIMIT,
-                ["temperature"],
-                FaultType.TEMP_CONTROL_LOSS,
-                abs(slope) / ROC_LIMIT,
+        roc = profile.roc
+        if roc is None:
+            return
+        slope = float(w.x[fi[roc.feature]])
+        if w.operation not in roc.exempt and not w.settling and abs(slope) > roc.limit:
+            fired[f"rules-roc_{roc.tag}"] = Evidence(
+                "rules", abs(slope), roc.limit, [roc.tag], roc.fault, abs(slope) / roc.limit
             )
 
     # layer 2
     def _stats(
         self, z: np.ndarray, w: Window, fired: dict[str, Evidence], raw: dict[str, float]
     ) -> None:
+        profile, fi = self.profile, self.profile.feature_index
         best: dict[str, tuple[float, float, str]] = {}
-        for f in STATS_FEATURES:
-            tag = FEATURE_TAG[f]
+        for f in profile.stats_features:
+            tag = profile.feature_tag[f]
             if tag in w.held_signals:
                 self.ewma.pop(f, None)
                 continue
-            e = EWMA_LAMBDA * z[_F[f]] + (1 - EWMA_LAMBDA) * self.ewma.get(f, 0.0)
+            e = EWMA_LAMBDA * z[fi[f]] + (1 - EWMA_LAMBDA) * self.ewma.get(f, 0.0)
             self.ewma[f] = e
             channel = f"stats:{f}"
             raw[channel] = abs(e)
@@ -274,26 +271,26 @@ class Detector:
                 and (tag not in best or abs(e) / thr > best[tag][0] / best[tag][1])
             ):
                 best[tag] = (abs(e), thr, f)
-        for tag, (score, thr, f) in best.items():
+        for tag, (score, thr, _f) in best.items():
             fired[f"stats-{tag}"] = Evidence(
-                "stats", score, thr, [tag], suggest(self._signs(z), f), score / thr
+                "stats", score, thr, [tag], profile.suggest(self._signs(z)), score / thr
             )
 
     # layer 3
     def _multivariate(
         self, ch: Channels, i: int, fired: dict[str, Evidence], raw: dict[str, float]
     ) -> None:
+        profile = self.profile
         contrib = ch.spe_contrib[i]
         order = np.argsort(-contrib)
         top: list[str] = []
         for j in order:
-            tag = FEATURE_TAG[FEATURES[j]]
+            tag = profile.feature_tag[profile.features[j]]
             if tag not in top:
                 top.append(tag)
             if len(top) == 3:
                 break
         signs = self._signs(ch.z[i])
-        lead = FEATURES[int(order[0])]
         for channel, key, layer in (
             ("mspc:t2", "mspc-t2", "mspc"),
             ("mspc:spe", "mspc-spe", "mspc"),
@@ -304,24 +301,14 @@ class Detector:
             thr = self.model.thresholds.get(channel)
             if thr is not None and value > thr:
                 fired[key] = Evidence(
-                    layer, float(value), thr, top, suggest(signs, lead), float(value) / thr
+                    layer, float(value), thr, top, profile.suggest(signs), float(value) / thr
                 )
 
-    @staticmethod
-    def _signs(z: np.ndarray) -> dict[str, float]:
-        return {f: float(z[_F[f]]) for f in FEATURES}
+    def _signs(self, z: np.ndarray) -> dict[str, float]:
+        return {f: float(z[i]) for f, i in self.profile.feature_index.items()}
 
 
-def suggest(z: dict[str, float], lead: str) -> FaultType | None:
-    """A fault class from the pattern of aligned features (explainable, not learned)."""
-    if z["hours_since_bolus"] > 3 or z["feed_rate"] < -3:
-        return FaultType.FEED_PUMP_FAILURE
-    if z["do_err_mean"] < -3 and z["ph_err_mean"] < -2:
-        return FaultType.CONTAMINATION
-    if z["temp_err_std"] > 3 or abs(z["temp_slope"]) > 3:
-        return FaultType.TEMP_CONTROL_LOSS
-    if (z["agitation_mean"] > 2 or z["o2_mean"] > 2) and z["do_err_mean"] < 0:
-        return FaultType.DO_SPARGER_FOULING
-    if z["co2_mean"] > 2 or z["base_rate"] < -2:
-        return FaultType.PH_PROBE_DRIFT
-    return None
+def suggest(z: dict[str, float], lead: str | None = None) -> FaultType | None:
+    """The bioreactor's fault-class heuristic (explainable, not learned); each profile
+    has its own (`ai.profiles`)."""
+    return BIOREACTOR.suggest(z)

@@ -45,9 +45,10 @@ TOOLS: list[dict[str, Any]] = [
         "name": "find_objects",
         "description": (
             "Search the address space. Filter by object type (e.g. BatchType, "
-            "AnomalyAlertType, ProcessValueType, BioreactorType) and/or text found in the "
-            "elementId or display name (case-insensitive). root_only lists the browse "
-            "roots. Returns elementId, displayName, type and parent for each match."
+            "AnomalyAlertType, ProcessValueType, RotaryTabletPressType, MaterialLotType) "
+            "and/or text in the elementId or display name (case-insensitive). root_only "
+            "lists the browse roots. Returns elementId, displayName, type and parent for "
+            "each match."
         ),
         "input_schema": {
             "type": "object",
@@ -92,7 +93,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "read_values",
         "description": (
             "Current value, quality and plant-time timestamp of objects. max_depth > 1 "
-            "also returns component values (a bioreactor with max_depth 0 returns its "
+            "also returns component values (a unit with max_depth 0 returns its "
             "whole live state). A batch's value holds its recipe, levers, outcome and "
             "operation/phase timeline."
         ),

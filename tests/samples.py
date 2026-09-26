@@ -8,10 +8,14 @@ from common import models as m
 from common import uns
 from common.uns import SimCommand, TopicClass
 
-UNIT = uns.UnitPath("chennai", "upstream", "suite-1", "BR-101")
+UNIT = uns.UnitPath("grange-castle", "upstream", "suite-1", "BR-101")
+TRAIN_UNIT = uns.UnitPath("tuas", "api", "train-1", "FD-202")
 TS = datetime(2026, 9, 22, 10, 15, 5, 123000, tzinfo=UTC)
 BATCH = "B2026-0142"
 LEVERS = m.Levers(shift_day=5.0, prod_temp=33.0, ph_sp=7.0, do_sp=40.0, feed_mult=1.0)
+API_LEVERS = m.ApiLevers(
+    rxn_temp=85.0, ac2o_ratio=1.25, rxn_time=3.0, cool_rate=10.0, dry_temp=50.0
+)
 Q = m.Quantiles(p10=3.1, p50=3.4, p90=3.7)
 
 
@@ -39,6 +43,52 @@ def samples() -> list[tuple[str, object]]:
         (
             uns.events(UNIT, "batch"),
             _p(m.BatchEventPayload, m.BatchEnded(batch_id=BATCH, status="EARLY_HARVEST")),
+        ),
+        (
+            uns.events(TRAIN_UNIT, "batch"),
+            _p(
+                m.BatchEventPayload,
+                m.BatchStarted(
+                    batch_id=BATCH,
+                    recipe="asa-v2",
+                    campaign="PC",
+                    planned_levers=API_LEVERS,
+                    process="api",
+                ),
+            ),
+        ),
+        (
+            uns.events(TRAIN_UNIT, "batch"),
+            _p(
+                m.BatchEventPayload,
+                m.BatchEnded(batch_id=BATCH, status="COMPLETE", disposition="REJECTED"),
+            ),
+        ),
+        (
+            uns.events(TRAIN_UNIT, "material"),
+            _p(
+                m.MaterialEventPayload,
+                m.MaterialProduced(
+                    batch_id=BATCH,
+                    lot=BATCH,
+                    material="Acetylsalicylic acid API",
+                    quantity_kg=571.2,
+                ),
+                "kg",
+            ),
+        ),
+        (
+            uns.events(UNIT, "material"),
+            _p(
+                m.MaterialEventPayload,
+                m.MaterialConsumed(
+                    batch_id=BATCH,
+                    lot="B2026-0101",
+                    material="Acetylsalicylic acid API",
+                    quantity_kg=200.0,
+                ),
+                "kg",
+            ),
         ),
         (
             uns.events(UNIT, "operator"),
@@ -71,7 +121,7 @@ def samples() -> list[tuple[str, object]]:
             uns.ai_prediction(UNIT),
             _p(
                 m.PredictionPayload,
-                m.Prediction(titer=Q, batch_day=4.0, model_version="y-1"),
+                m.Prediction(target="titer", value=Q, batch_day=4.0, model_version="y-1"),
                 "g/L",
                 m.Src.YIELD,
             ),
@@ -82,6 +132,7 @@ def samples() -> list[tuple[str, object]]:
                 m.RecommendationPayload,
                 m.Recommendation(
                     id="R-1",
+                    target="titer",
                     levers={"shift_day": m.LeverAdvice(current=6.0, recommended=5.0, frozen=False)},
                     predicted_current=Q,
                     predicted_recommended=Q,
@@ -170,6 +221,30 @@ def samples() -> list[tuple[str, object]]:
                 m.ClockStatus(sim_time=TS, speed=3600, paused=False),
                 batch=None,
             ),
+        ),
+        (
+            uns.sim_inventory(),
+            _p(
+                m.InventoryPayload,
+                m.Inventory(
+                    site="freiburg",
+                    lots=[
+                        m.LotStock(
+                            lot="B2026-0101",
+                            material="Acetylsalicylic acid API",
+                            quantity_kg=371.2,
+                            released=TS,
+                            properties={"d50_um": 214.0},
+                        )
+                    ],
+                ),
+                "kg",
+                batch=None,
+            ),
+        ),
+        (
+            uns.sim_opening_stock(),
+            _p(m.InventoryPayload, m.Inventory(site="freiburg"), "kg", batch=None),
         ),
         (
             uns.sim_faults("BR-101"),

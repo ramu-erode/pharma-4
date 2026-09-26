@@ -7,10 +7,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from pydantic import BaseModel
+
 from common.models import BatchStatus, Campaign, Levers, Operation
 from simulator import batches as b
 from simulator.engine import BatchRun
 from simulator.process import Traits
+from simulator.train import TrainRun
 
 _EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -48,3 +51,15 @@ def final_titer(levers: Levers, traits: Traits | None = None, seed: int = 0) -> 
     run = BatchRun(spec, quiet=True)
     run.run_to_end()
     return run.state.titer
+
+
+def train_remaining(run: TrainRun, levers: BaseModel) -> float:
+    """True yield target of a train batch (API or tablet yield, %) if it continued from
+    now with `levers`. Levers whose window has passed keep their actual values. Returns
+    0.0 for a batch that ends ABORTED."""
+    clone = run.snapshot()
+    clone.quiet = True
+    update = {k: v for k, v in levers.model_dump().items() if clone.lever_open(k)}
+    clone.levers = clone.levers.model_copy(update=update)
+    clone.run_to_end()
+    return 0.0 if clone.status is BatchStatus.ABORTED else clone.target()

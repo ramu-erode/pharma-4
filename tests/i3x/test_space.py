@@ -6,7 +6,9 @@ import pytest
 from common import uns
 from i3x import space as sp
 from i3x.values import LiveCache, current
+from simulator.api.engine import LAB_UNITS as API_LAB
 from simulator.engine import LAB_UNITS
+from simulator.osd.engine import LAB_UNITS as OSD_LAB
 from tests.i3x import fixtures as fx
 
 
@@ -16,7 +18,10 @@ def space() -> sp.AddressSpace:
 
 
 def test_lab_points_match_what_the_simulator_publishes():
-    assert sp.LAB_UNITS == LAB_UNITS
+    labs = sp.LAB_UNITS
+    assert labs["bioreactor"] == LAB_UNITS
+    assert labs["reactor"] | labs["filter_dryer"] == API_LAB
+    assert labs["blender"] | labs["roller_compactor"] | labs["tablet_press"] == OSD_LAB
 
 
 def test_every_object_type_has_a_valid_json_schema_in_a_declared_namespace():
@@ -37,18 +42,19 @@ def test_element_ids_are_unique_across_objects_types_and_relationships(space):
     assert len(ids) == len(set(ids))
 
 
-def test_roots_are_the_plant_and_the_three_folders(space):
+def test_roots_are_the_plant_and_the_four_folders(space):
     assert {o.element_id for o in space.roots()} == {
-        "pharmaco",
+        "pharmanextgen",
         sp.ROOT_BATCHES,
         sp.ROOT_RECIPES,
         sp.ROOT_PHASES,
+        sp.ROOT_MATERIALS,
     }
 
 
 def test_plant_hierarchy_uses_uns_path_prefixes(space):
-    assert space.get(fx.UNIT.prefix).parent_id == "pharmaco/chennai/upstream/suite-1"
-    assert space.get("pharmaco/chennai").parent_id == "pharmaco"
+    assert space.get(fx.UNIT.prefix).parent_id == "pharmanextgen/grange-castle/upstream/suite-1"
+    assert space.get("pharmanextgen/grange-castle").parent_id == "pharmanextgen"
 
 
 def test_a_data_points_element_id_is_its_uns_topic(space):
@@ -125,8 +131,35 @@ def test_descendants_follow_max_depth(space):
     assert fx.PV_PH in space.descendants(unit, 0)
 
 
-def test_only_bioreactors_are_modelled():
+def test_only_known_equipment_types_are_modelled():
     cat = fx.catalog()
     cat.units[0]["type"] = "Centrifuge"
-    with pytest.raises(ValueError, match="only bioreactors"):
+    with pytest.raises(ValueError, match="unknown equipment type"):
         sp.build(cat)
+
+
+def test_sites_and_trains_hang_off_the_enterprise(space):
+    tuas = space.get("pharmanextgen/tuas")
+    assert tuas.parent_id == "pharmanextgen" and tuas.value["location"] == "Singapore"
+    rx = space.get(fx.RX.prefix)
+    assert rx.type_id == "ReactorCrystallizerType"
+    assert rx.parent_id == "pharmanextgen/tuas/api/train-1"
+    assert rx.value["equipmentClass"] == "reactor" and rx.value["process"] == "api"
+    # a reactor's own phases and lab results, and it is the API train's home unit
+    assert space.get(uns.state_phase(fx.RX, "DOSE_ADD"))
+    assert not space.get(uns.state_phase(fx.RX, "PH_CTRL"))
+    assert space.get(uns.lab(fx.RX, "conversion_ipc"))
+    assert space.get(uns.ai_prediction(fx.RX))
+
+
+def test_lots_carry_the_genealogy(space):
+    lot = space.get("lot/B2026-0140")
+    assert lot.value["producedBy"] == "B2026-0140"
+    assert lot.value["consumedBy"] == [{"batch": "B2026-0143", "quantityKg": 200.0}]
+    made = {t.element_id for _, t in space.related("B2026-0140", sp.PRODUCED)}
+    used = {t.element_id for _, t in space.related("B2026-0143", sp.CONSUMED)}
+    assert made == used == {"lot/B2026-0140"}
+    assert space.get("B2026-0143").value["lotsConsumed"] == [
+        {"lot": "B2026-0140", "quantityKg": 200.0}
+    ]
+    assert space.get("B2026-0140").value["process"] == "api"
